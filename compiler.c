@@ -457,6 +457,31 @@ void mod_deep_end(Module *mod) {
 
 // Whatev
 
+// Tokenizer
+typedef struct {
+	char *data;
+	int line, col;
+	int type;
+} Token;
+
+#define TT_DEFWORD 0
+#define TT_KEYWORD 1
+#define TT_KEYTYPE 2
+#define TT_LITERAL 3
+#define TT_AUGMENT 4
+#define TT_DELIMIT 5
+#define TT_SPLITTR 6
+
+char *KEYWORDS = "module,export,asm,if,else,loop,label,goto,continue,break,return,import,as,using,struct,method,interface,implements,operator,len,is";
+char *KEYTYPES = "uint8,uint16,uint32,uint64,uint,int8,int16,int32,int64,int,float32,float64,float,comp64,comp,bool,vect,void,type";
+char *RESERVED = "~`!@#$%^&*()[]{}+-=\"\'\\|:;/?>.<,";
+char *MULTI_DELIMS = ";:#";
+
+int token_type(char*data) {
+	return TT_DEFWORD;
+}
+
+
 void help() {
 	printf("\n");
 	printf("Usage:\n");
