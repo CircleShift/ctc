@@ -53,7 +53,7 @@ bool vect_remove(Vector *v, size_t index) {
 	char *remove = v->data + (index * v->_el_sz);
 	char *override = v->data + (index + 1) * v->_el_sz;
 
-	for(int i = 0; i < (v->count - 1) * v->_el_sz; i++) {
+	for(size_t i = 0; i < (v->count - 1) * v->_el_sz; i++) {
 		remove[i] = override[i];
 	}
 
@@ -79,7 +79,7 @@ bool vect_insert(Vector *v, size_t index, void *el) {
 	char *new_spot = v->data + (v->count + 1) * v->_el_sz;
 	char *old_spot = v->data + v->count * v->_el_sz;
 
-	for (int i = 0; i > (index * v->_el_sz); i--) {
+	for (int i = ; i >= (index * v->_el_sz); i++) {
 		new_spot[i] = old_spot[i];
 	}
 
@@ -240,13 +240,50 @@ void art_add_str(Artifact *art, char *str) {
 
 
 
+// Compile Data - CompData holds final program as it is assembled
+typedef struct {
+	Vector header, data, text;
+} CompData;
+
+CompData cdat_init() {
+	CompData out = {0};
+
+	out.header = vect_init(sizeof(char));
+	out.data = vect_init(sizeof(char));
+	out.text = vect_init(sizeof(char));
+
+	return out;
+}
+
+void cdat_write_to_file(CompData *cdat, FILE *fout) {
+	fprintf(fout, "%s\n", vect_as_string(&(cdat->header)));
+	fprintf(fout, "%s\n", vect_as_string(&(cdat->data)));
+	fprintf(fout, "%s\n", vect_as_string(&(cdat->text)));
+	fflush(fout);
+}
+
+void cdat_end(CompData *cdat) {
+	vect_end(&(cdat->header));
+	vect_end(&(cdat->data));
+	vect_end(&(cdat->text));
+}
+
+
+
 // Types
+
+typedef struct Module {
+	char *name;
+	bool exported;
+	Vector types, vars, funcs, submods;
+	struct Module *parent;
+} Module;
 
 typedef struct {
 	char *name;       // Name of the type
 	int size;         // Size (bytes) of the type
 	Vector members;   // Member variables (Stored as variables)
-	void *module;     // Module (for methods and member-type resolution) to tie the type to.
+	Module *module;     // Module (for methods and member-type resolution) to tie the type to.
 } Type;
 
 typedef struct {
@@ -260,12 +297,18 @@ typedef struct {
 #define PTYPE_REF 1
 #define PTYPE_ARR 2
 
+typedef struct {
+	char *name;
+	Vector inputs, outputs;
+	Module *module;
+} Function;
+
 
 
 // Copies the name, does not copy the module.
 // Types should be freed at the end of the second pass,
 // as they are shared among all variable structs
-Type typ_init(char *name, void *module) {
+Type typ_init(char *name, Module *module) {
 	Type out = {0};
 
 	Vector name_cpy = vect_from_string(name);
@@ -312,6 +355,20 @@ Variable var_init(char *name, Type *type) {
 	return out;
 }
 
+Variable var_copy(Variable *to_copy) {
+	Variable out = var_init(to_copy->name, to_copy->type);
+
+	out.location = to_copy->location;
+	out.ptr_chain = vect_init(sizeof(int));
+
+	for (int i = 0; i < to_copy->ptr_chain.count; i++) {
+		int *ptr_orig = vect_get(&(to_copy->ptr_chain), i);
+		vect_push(&(out.ptr_chain), ptr_orig);
+	}
+
+	return out;
+}
+
 void var_deep_end(Variable *var) {
 	Variable *v = var;
 	free(v->name);
@@ -334,25 +391,67 @@ Variable _op_coerce(Variable *base, Variable *to_coerce) {
 	return out;
 }
 
-
+// TODO: Operations on variables
 
 // Functions
 
-typedef struct {
-	char *name;
-	Vector inputs, outputs;
-	void *module;
-} Function;
+Function func_init(char *name, Module *module) {
+	Function out = {0};
+
+	Vector name_cpy = vect_from_string(name);
+	out.name = vect_as_string(&name_cpy);
+	out.module = module;
+	out.inputs = vect_init(sizeof(Variable));
+	out.outputs = vect_init(sizeof(Variable));
+
+	return out;
+}
+
+void func_end(Function *func) {
+	free(func->name);
+	func->module = NULL;
+
+	for(int i = 0; i < func->inputs.count; i++) {
+		Variable *to_end = vect_get(&(func->inputs), i);
+		var_end(to_end);
+	}
+
+	for(int i = 0; i < func->outputs.count; i++) {
+		Variable *to_end = vect_get(&(func->outputs), i);
+		var_end(to_end);
+	}
+}
 
 
 
 // Modules
 
-typedef struct {
-	char *name;
-	bool exported;
-	Vector vars, funcs, submods;
-} Module;
+Module mod_init(char *name, Module *parent, bool export) {
+	Module out = {0};
+
+	Vector name_cpy = vect_from_string(name);
+	out.name = vect_as_string(&name_cpy);
+	out.parent = parent;
+	out.exported = export;
+
+	out.types = vect_init(sizeof(Type));
+	out.vars = vect_init(sizeof(Variable));
+	out.funcs = vect_init(sizeof(Function));
+	out.submods = vect_init(sizeof(Module));
+
+	return out;
+}
+
+// Recursive end of all modules. To be called at the end
+// of the compilation on the root module. Cleans everything
+// in the modules except for the tokenizations.
+void mod_deep_end(Module *mod) {
+	free(mod->name);
+
+	for(size_t i = 0; i < mod->types.count; i++) {
+	}
+
+}
 
 
 
