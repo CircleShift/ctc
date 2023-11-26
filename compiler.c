@@ -53,7 +53,7 @@ bool vect_remove(Vector *v, size_t index) {
 	char *remove = v->data + (index * v->_el_sz);
 	char *override = v->data + (index + 1) * v->_el_sz;
 
-	for(size_t i = 0; i < (v->count - 1) * v->_el_sz; i++) {
+	for(size_t i = 0; i < (v->count - index - 1) * v->_el_sz; i++) {
 		remove[i] = override[i];
 	}
 
@@ -79,11 +79,13 @@ bool vect_insert(Vector *v, size_t index, void *el) {
 	char *new_spot = v->data + (v->count + 1) * v->_el_sz;
 	char *old_spot = v->data + v->count * v->_el_sz;
 
-	for (int i = ; i >= (index * v->_el_sz); i++) {
-		new_spot[i] = old_spot[i];
+	for (size_t i = 0; i < (v->count - index) * v->_el_sz; i++) {
+		*new_spot = *old_spot;
+		new_spot--;
+		old_spot--;
 	}
 
-	for (int i = 0; i < v->_el_sz; i++) {
+	for (size_t i = 0; i < v->_el_sz; i++) {
 		old_spot[i] = ((char *)el)[i];
 	}
 
