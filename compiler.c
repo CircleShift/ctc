@@ -5,6 +5,7 @@
 #include <string.h>
 
 
+
 // Vector utils
 
 #define VECT_MAX_GROW 100
@@ -114,9 +115,9 @@ Vector vect_clone(Vector *v) {
 	
 	out._el_sz = v->_el_sz;
 	out.count = 0;
-	out.size = v->size;
+	out.size = v->count + 1;
 
-	out.data = malloc(out.size * out._el_sz);
+	out.data = malloc((out.count + 1) * out._el_sz);
 
 	char *former = v->data;
 	char *latter = out.data;
@@ -139,21 +140,223 @@ Vector vect_from_string(char *s) {
 	return out;
 }
 
+// Returns the vector data as a null-terminated string
+// do NOT free this pointer. Not safe to use this string
+// at the same time as you are adding or removing from the
+// vector. Instead consider cloning the vector if you must
+// have both, or want an independant copy of the string.
 char *vect_as_string(Vector *v) {
-	((char*)v->data)[v->count] = 0;
+	((char*)v->data)[v->count * v->_el_sz] = 0;
 	return v->data;
 }
 
 
 void vect_end(Vector *v) {
+	v->_el_sz = 0;
+	v->count = 0;
+	v->size = 0;
 	free(v->data);
+	v->data = NULL;
 }
+
 
 
 // Artifacts (vect of strings)
 
+typedef Vector Artifact;
+
+/* Splits the string via the given character, and
+ * stores the split strings in an artifact
+ */
+Artifact art_from_str(const char *str, char split) {
+	Artifact out = vect_init(sizeof(char *));
+
+	char *cur = malloc(1);
+	cur[0] = 0;
+	int cur_len = 0;
+
+	for (int i = 0; str[i] != 0; i++) {
+		if (str[i] == split) {
+			cur[cur_len] = 0;
+			vect_push(&out, &cur);
+			cur = malloc(1);
+			cur_len = 0;
+		} else {
+			cur_len += 1;
+			cur = realloc(cur, cur_len + 1);
+			cur[cur_len - 1] = str[i];
+		}
+	}
+
+	if (cur_len > 0) {
+		cur[cur_len] = 0;
+		vect_push(&out, &cur);
+	} else {
+		free(cur);
+	}
+
+	return out;
+}
+
+// Joins the string together with the provided character in between
+// must free the returned data after use.
+char *art_to_str(Artifact *art, char join) {
+	char *out = malloc(1);
+	int out_len = 0;
+
+	for (int i = 0; i < art->count; i++) {
+		char ** cpy = vect_get(art, i);
+		for(int j = 0; cpy[j] != 0; j++) {
+			out[out_len] = (*cpy)[j];
+			out_len += 1;
+			out = realloc(out, out_len + 1);
+		}
+	}
+
+	out[out_len] = 0;
+
+	return out;
+}
+
+// Pops a string off the end of the artifact,
+// freeing the data associated
+void art_pop_str(Artifact *art) {
+	if (art->count == 0)
+		return;
+	
+	char ** to_free = vect_get(art, art->count - 1);
+	free(*to_free);
+	vect_pop(art);
+}
+
+// Copies a string onto the artifact,
+// you must free the original string
+// manually if it was malloc-ed
+void art_add_str(Artifact *art, char *str) {
+	Vector copy = vect_from_string(str);
+	char * copy_ptr = vect_as_string(&copy);
+	vect_push(art, &copy_ptr);
+}
 
 
+
+// Types
+
+typedef struct {
+	char *name;       // Name of the type
+	int size;         // Size (bytes) of the type
+	Vector members;   // Member variables (Stored as variables)
+	void *module;     // Module (for methods and member-type resolution) to tie the type to.
+} Type;
+
+typedef struct {
+	char *name;
+	Type *type;
+	Vector ptr_chain;
+	int location; // negative for on stack, positive or zero for in register
+} Variable;
+
+#define PTYPE_PTR 0
+#define PTYPE_REF 1
+#define PTYPE_ARR 2
+
+
+
+// Copies the name, does not copy the module.
+// Types should be freed at the end of the second pass,
+// as they are shared among all variable structs
+Type typ_init(char *name, void *module) {
+	Type out = {0};
+
+	Vector name_cpy = vect_from_string(name);
+	out.name = vect_as_string(&name_cpy);
+	out.members = vect_init(sizeof(Variable));
+	out.module = module;
+	out.size = 0;
+
+	return out;
+}
+
+// Only for use by type_end on variable clean up
+// at the end of the second pass
+void var_deep_end(Variable *var);
+
+// Deep end, will free all memory associated with the
+// struct, including name and sub-member variables
+void typ_end(Type *t) {
+	free(t->name);
+	t->module = NULL;
+
+	for (int i = 0; i < t->members.count; i++) {
+		Variable *to_end = vect_get(&(t->members), i);
+		var_deep_end(to_end);
+	}
+
+	vect_end(&(t->members));
+}
+
+
+
+// Variables
+
+// Initializes the variable, copying name, not copying type.
+Variable var_init(char *name, Type *type) {
+	Variable out = {0};
+	
+	Vector name_cpy = vect_from_string(name);
+	out.name = vect_as_string(&name_cpy);
+	out.type = type;
+	out.ptr_chain = vect_init(sizeof(int));
+	out.location = 0;
+
+	return out;
+}
+
+void var_deep_end(Variable *var) {
+	Variable *v = var;
+	free(v->name);
+	vect_end(&(v->ptr_chain));
+	typ_end(v->type);
+}
+
+// Simple cleanup for variables while the second pass is ongoing.
+void var_end(Variable *v) {
+	free(v->name);
+	vect_end(&(v->ptr_chain));
+}
+
+// Variable operations
+
+// Type coercion engine
+// TODO: all
+Variable _op_coerce(Variable *base, Variable *to_coerce) {
+	Variable out = {0};
+	return out;
+}
+
+
+
+// Functions
+
+typedef struct {
+	char *name;
+	Vector inputs, outputs;
+	void *module;
+} Function;
+
+
+
+// Modules
+
+typedef struct {
+	char *name;
+	bool exported;
+	Vector vars, funcs, submods;
+} Module;
+
+
+
+// Whatev
 
 void help() {
 	printf("\n");
