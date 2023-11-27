@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
+#include <ctype.h>
 
 
 
@@ -503,10 +504,132 @@ char *KEYTYPES = "uint8,uint16,uint32,uint64,uint,int8,int16,int32,int64,int,flo
 char *RESERVED = "~`!@#$%^&*()[]{}+-=\"\'\\|:;/?>.<,";
 char *MULTI_DELIMS = ";:#";
 
+
+bool in_csv(char *csv, char *match) {
+	int along = 0;
+
+	for (int i = 0; csv[i] != 0; i++) {
+		if (csv[i] == ',') {
+			if(along >= 0 && match[along] == 0)
+				return true;
+			along = 0;
+		} else if (along >= 0 && match[along] == csv[i]) {
+			along++;
+		} else {
+			along = -1;
+		}
+	}
+	
+	return along >= 0 && match[along] == 0; 
+}
+
+bool is_reserved(char c) {
+	return strchr(MULTI_DELIMS, c) != NULL;
+}
+
 int token_type(char*data) {
 	return TT_DEFWORD;
 }
 
+Token parse_string_literal(int *ch, int *line, int *col, FILE *fin) {
+	char first = *ch;
+	Vector str = vect_init(sizeof(char));
+	
+	Token out = {0};
+	out.line = *line;
+	out.col = *col;
+	out.type = TT_LITERAL;
+	
+	*ch = fgetc(fin);
+
+	while () {
+	}
+
+	out.data = vect_as_string(&str);
+
+	return out;
+}
+
+Token parse_numeric_literal(int *first, int *line, int *col, FILE *fin) {
+}
+
+void parse_reserved_tokens(int *first, Vector *out, int *line, int *col, FILE *fin) {
+}
+
+Token parse_word_token(int *first, int *line, int *col, FILE *fin) {
+}
+
+void add_nl_token(Vector *out, int *line, int *col) {
+	Token add = {0};
+	
+	add.col = *col;
+	add.line = *line;
+	add.type = TT_SPLITTR;
+
+	add.data = malloc(sizeof(char) * 2);
+	add.data[0] = '\n';
+	add.data[1] = 0;
+
+	vect_push(out, &add);
+
+	*col = 1;
+	*line += 1;
+}
+
+void handle_comment(int *ch, FILE *fin) {
+	while(*ch != '\n' && *ch != EOF) {
+		*ch = fgetc(fin);
+	}
+}
+
+
+Vector parse_file(FILE *fin) {
+	Vector out = vect_init(sizeof(Token));
+
+	int line = 1, col = 1;
+	int check = fgetc(fin);
+	Token add = {0};
+
+	while (true) {
+		add.type = -1;
+
+		if (check == EOF) {
+			break;
+		} else if (isspace(check)) {
+			check = fgetc(fin);
+		} else if (check == '#') {
+			handle_comment(&check, fin);
+		} else if (check == '\"' || check == '\'') {
+			add = parse_string_literal(&check, &line, &col, fin);
+		} else if (isalpha(check)) {
+			add = parse_numeric_literal(&check, &line, &col, fin);
+		} else if (is_reserved(check)) {
+			parse_reserved_tokens(&check, &out, &line, &col, fin);
+		} else {
+			add = parse_word_token(&check, &line, &col, fin);
+		}
+
+		if (add.type >= 0)
+			vect_push(&out, &add);
+
+		if (check == '\n') {
+			add_nl_token(&out, &line, &col);
+			check = fgetc(fin);
+		}
+	}
+
+	return out;
+}
+
+
+
+// Compiler funcs
+
+void compile (Artifact path_in, Artifact path_out) {
+	
+}
+
+// Entrypoint
 
 void help() {
 	printf("\n");
@@ -524,9 +647,17 @@ int main(int argc, char ** argv) {
 		return 1;
 	}
 
-	for (int i = 0; i < argc; i++) {
-		printf("%s\n", argv[i]);
+	Artifact in = art_from_str(argv[1], '/');
+	Artifact out;
+	if (argc == 2) {
+		out = art_from_str("out.asm", '/');
+	} else {
+		out = art_from_str(argv[2], '/');
 	}
+
+	compile(in, out);
+	art_end(&in);
+	art_end(&out);
 
 	return 0;
 }
