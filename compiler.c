@@ -12,7 +12,7 @@
 #define VECT_MIN_SIZE 4
 
 typedef struct {
-	int _el_sz, count, size;
+	size_t _el_sz, count, size;
 	void *data;
 } Vector;
 
@@ -124,7 +124,7 @@ Vector vect_clone(Vector *v) {
 	char *former = v->data;
 	char *latter = out.data;
 
-	for(int i = 0; i < out.count * out._el_sz; i++) {
+	for(size_t i = 0; i < out.count * out._el_sz; i++) {
 		latter[i] = former[i];
 	}
 
@@ -206,10 +206,17 @@ char *art_to_str(Artifact *art, char join) {
 	char *out = malloc(1);
 	int out_len = 0;
 
-	for (int i = 0; i < art->count; i++) {
+	for (size_t i = 0; i < art->count; i++) {
 		char ** cpy = vect_get(art, i);
+		
 		for(int j = 0; cpy[j] != 0; j++) {
 			out[out_len] = (*cpy)[j];
+			out_len += 1;
+			out = realloc(out, out_len + 1);
+		}
+		
+		if (i < art->count - 1) {
+			out[out_len] = join;
 			out_len += 1;
 			out = realloc(out, out_len + 1);
 		}
@@ -240,6 +247,15 @@ void art_add_str(Artifact *art, char *str) {
 	vect_push(art, &copy_ptr);
 }
 
+// Frees all strings in the artifact,
+// then calls vect_end
+void art_end(Artifact *art) {
+	char **to_free = art->data;
+	for(size_t i = 0; i < art->count; i++) {
+		free(to_free[i]);
+	}
+	vect_end(art);
+}
 
 
 // Compile Data - CompData holds final program as it is assembled
@@ -322,9 +338,7 @@ Type typ_init(char *name, Module *module) {
 	return out;
 }
 
-// Only for use by type_end on variable clean up
-// at the end of the second pass
-void var_deep_end(Variable *var);
+void var_end(Variable *v);
 
 // Deep end, will free all memory associated with the
 // struct, including name and sub-member variables
@@ -332,9 +346,9 @@ void typ_end(Type *t) {
 	free(t->name);
 	t->module = NULL;
 
-	for (int i = 0; i < t->members.count; i++) {
+	for (size_t i = 0; i < t->members.count; i++) {
 		Variable *to_end = vect_get(&(t->members), i);
-		var_deep_end(to_end);
+		var_end(to_end);
 	}
 
 	vect_end(&(t->members));
@@ -363,19 +377,12 @@ Variable var_copy(Variable *to_copy) {
 	out.location = to_copy->location;
 	out.ptr_chain = vect_init(sizeof(int));
 
-	for (int i = 0; i < to_copy->ptr_chain.count; i++) {
+	for (size_t i = 0; i < to_copy->ptr_chain.count; i++) {
 		int *ptr_orig = vect_get(&(to_copy->ptr_chain), i);
 		vect_push(&(out.ptr_chain), ptr_orig);
 	}
 
 	return out;
-}
-
-void var_deep_end(Variable *var) {
-	Variable *v = var;
-	free(v->name);
-	vect_end(&(v->ptr_chain));
-	typ_end(v->type);
 }
 
 // Simple cleanup for variables while the second pass is ongoing.
@@ -413,12 +420,12 @@ void func_end(Function *func) {
 	free(func->name);
 	func->module = NULL;
 
-	for(int i = 0; i < func->inputs.count; i++) {
+	for(size_t i = 0; i < func->inputs.count; i++) {
 		Variable *to_end = vect_get(&(func->inputs), i);
 		var_end(to_end);
 	}
 
-	for(int i = 0; i < func->outputs.count; i++) {
+	for(size_t i = 0; i < func->outputs.count; i++) {
 		Variable *to_end = vect_get(&(func->outputs), i);
 		var_end(to_end);
 	}
@@ -450,7 +457,24 @@ Module mod_init(char *name, Module *parent, bool export) {
 void mod_deep_end(Module *mod) {
 	free(mod->name);
 
+	for(size_t i = 0; i < mod->vars.count; i++) {
+		Variable *v = vect_get(&(mod->vars), i);
+		var_end(v);
+	}
+
+	for(size_t i = 0; i < mod->funcs.count; i++) {
+		Function *f = vect_get(&(mod->funcs), i);
+		func_end(f);
+	}
+
+	for(size_t i = 0; i < mod->submods.count; i++) {
+		Module *m = vect_get(&(mod->submods), i);
+		mod_deep_end(m);
+	}
+
 	for(size_t i = 0; i < mod->types.count; i++) {
+		Type *t = vect_get(&(mod->types), i);
+		typ_end(t);
 	}
 
 }
