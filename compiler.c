@@ -482,8 +482,6 @@ void mod_deep_end(Module *mod) {
 
 
 
-// Whatev
-
 // Tokenizer
 typedef struct {
 	char *data;
@@ -534,6 +532,8 @@ int token_type(char*data) {
 Token parse_string_literal(int *ch, int *line, int *col, FILE *fin) {
 	char first = *ch;
 	Vector str = vect_init(sizeof(char));
+
+	vect_push(&str, &first);
 	
 	Token out = {0};
 	out.line = *line;
@@ -541,25 +541,107 @@ Token parse_string_literal(int *ch, int *line, int *col, FILE *fin) {
 	out.type = TT_LITERAL;
 	
 	*ch = fgetc(fin);
-
-	while () {
+	*col += 1;
+	char add = 0;
+	while (*ch != first && *ch != EOF) {
+		add = *ch;
+		if (*ch == '\\') {
+			vect_push(&str, &add);
+			*ch = fgetc(fin);
+			*col += 1;
+			if (*ch != EOF) {
+				if (*ch == '\n') {
+					*line += 1;
+					*col = 1;
+				}
+				vect_push(&str, &add);
+				*ch = fgetc(fin);
+				*col += 1;
+			}
+		} else {
+			if (*ch == '\n') {
+				*line += 1;
+				*col = 1;
+			}
+			vect_push(&str, &add);
+			*ch = fgetc(fin);
+			*col += 1;
+		}
 	}
+
+	vect_push(&str, &first);
 
 	out.data = vect_as_string(&str);
 
 	return out;
 }
 
-Token parse_numeric_literal(int *first, int *line, int *col, FILE *fin) {
+Token parse_numeric_literal(int *next, int *line, int *col, FILE *fin) {
+	Token out = {0};
+
+	out.col = *col;
+	out.line = *line;
+	out.type = TT_LITERAL;
+
+	Vector num = vect_init(sizeof(char));
+	char ch = *next;
+	vect_push(&num, &ch);
+	
+	bool dec = false;
+
+	while (*next != EOF) {
+		*next = fgetc(fin);
+		*col += 1;
+
+		if (*next == '.' && dec) {
+			break;
+		} else if (*next == '.') {
+			dec = true;
+		}
+
+		if (*next < '0' || *next > '9') {
+			break;
+		} else {
+			ch = *next;
+			vect_push(&num, &ch);
+		}
+	}
+
+	out.data = vect_as_string(&num);
+
+	return out;
 }
 
 void parse_reserved_tokens(int *first, Vector *out, int *line, int *col, FILE *fin) {
 }
 
-Token parse_word_token(int *first, int *line, int *col, FILE *fin) {
+Token parse_word_token(int *next, int *line, int *col, FILE *fin) {
+	Token out = {0}; 
+	out.line = *line;
+	out.col = *col;
+
+	Vector str = vect_init(sizeof(char));
+	char add = *next;
+
+	while (*next != EOF) {
+		if (isspace(*next) != 0 || is_reserved(add)) {
+			break;
+		} else {
+			vect_push(&str, &add);
+		}
+
+		*next = fgetc(fin);
+		add = *next;
+		*col += 1;
+	}
+	
+	out.data = vect_as_string(&str);
+
+	out.type = token_type(out.data);
+	return out;
 }
 
-void add_nl_token(Vector *out, int *line, int *col) {
+void parse_nl_token(Vector *out, int *line, int *col) {
 	Token add = {0};
 	
 	add.col = *col;
@@ -576,7 +658,7 @@ void add_nl_token(Vector *out, int *line, int *col) {
 	*line += 1;
 }
 
-void handle_comment(int *ch, FILE *fin) {
+void parse_comment(int *ch, FILE *fin) {
 	while(*ch != '\n' && *ch != EOF) {
 		*ch = fgetc(fin);
 	}
@@ -590,18 +672,16 @@ Vector parse_file(FILE *fin) {
 	int check = fgetc(fin);
 	Token add = {0};
 
-	while (true) {
+	while (check != EOF) {
 		add.type = -1;
 
-		if (check == EOF) {
-			break;
-		} else if (isspace(check)) {
+		if (isspace(check)) {
 			check = fgetc(fin);
 		} else if (check == '#') {
-			handle_comment(&check, fin);
+			parse_comment(&check, fin);
 		} else if (check == '\"' || check == '\'') {
 			add = parse_string_literal(&check, &line, &col, fin);
-		} else if (isalpha(check)) {
+		} else if (check >= '0' && check <= '9') {
 			add = parse_numeric_literal(&check, &line, &col, fin);
 		} else if (is_reserved(check)) {
 			parse_reserved_tokens(&check, &out, &line, &col, fin);
@@ -613,7 +693,7 @@ Vector parse_file(FILE *fin) {
 			vect_push(&out, &add);
 
 		if (check == '\n') {
-			add_nl_token(&out, &line, &col);
+			parse_nl_token(&out, &line, &col);
 			check = fgetc(fin);
 		}
 	}
