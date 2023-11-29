@@ -485,6 +485,14 @@ typedef struct {
 	int type;
 } Token;
 
+bool tok_str_eq(Token *tok, const char *cmp) {
+	return strcmp(tok->data, cmp) == 0;
+}
+
+bool tok_eq(Token *a, Token *b) {
+	return strcmp(a->data, b->data) == 0 && a->type == b->type;
+}
+
 #define TT_DEFWORD 0
 #define TT_KEYWORD 1
 #define TT_KEYTYPE 2
@@ -595,6 +603,7 @@ Token parse_string_literal(int *ch, int *line, int *col, FILE *fin) {
 					*line += 1;
 					*col = 1;
 				}
+				add = *ch;
 				vect_push(&str, &add);
 				*ch = fgetc(fin);
 				*col += 1;
@@ -760,7 +769,7 @@ Vector parse_file(FILE *fin) {
 	while (check != EOF) {
 		add.type = -1;
 
-		if (isspace(check)) {
+		if (isspace(check) && check != '\n') {
 			check = fgetc(fin);
 		} else if (check == '#') {
 			parse_comment(&check, fin);
@@ -770,7 +779,7 @@ Vector parse_file(FILE *fin) {
 			add = parse_numeric_literal(&check, &line, &col, fin);
 		} else if (is_reserved(check)) {
 			parse_reserved_tokens(&check, &out, &line, &col, fin);
-		} else {
+		} else if(check != '\n') {
 			add = parse_word_token(&check, &line, &col, fin);
 		}
 
@@ -789,6 +798,16 @@ Vector parse_file(FILE *fin) {
 
 
 // Compiler funcs
+
+Module p1_parse_file() {
+}
+
+// Phase 1 module building
+Module p1_build_root(Artifact *path_in, Vector *tokens) {
+	
+}
+
+
 
 void compile (Artifact path_in, Artifact path_out) {
 	char *full_path = art_to_str(&path_in, '/');
@@ -810,7 +829,8 @@ void compile (Artifact path_in, Artifact path_out) {
 		// Write all tokens
 		for (size_t i = 0; i < tokens.count; i++) {
 			Token *t = vect_get(&tokens, i);
-			fprintf(fout, "{ line: %d, column: %d, type %d, data: %s }\n", t->line, t->col, t->type, t->data);
+			if (strcmp(t->data, "\n") != 0)
+				fprintf(fout, "{ line: %d, column: %d, type %d, data: %s }\n", t->line, t->col, t->type, t->data);
 			free(t->data);
 		}
 	}
