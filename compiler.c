@@ -474,6 +474,10 @@ void mod_deep_end(Module *mod) {
 		typ_end(t);
 	}
 
+	vect_end(&(mod->vars));
+	vect_end(&(mod->funcs));
+	vect_end(&(mod->submods));
+	vect_end(&(mod->types));
 }
 
 
@@ -799,44 +803,120 @@ Vector parse_file(FILE *fin) {
 
 // Compiler funcs
 
-Module p1_parse_file() {
+#define BT_FUNCTION 0
+#define BT_METHOD 1
+#define BT_INTERFACE 2
+#define BT_MODULE 3
+
+int tnsl_block_type() {
 }
 
-// Phase 1 module building
-Module p1_build_root(Artifact *path_in, Vector *tokens) {
-	
+bool tnsl_is_def() {
+	return false;
+}
+
+bool tnsl_is_boolean() {
+	return false;
+}
+
+// Phase 1 - Module building
+bool p1_error = false;
+
+void p1_parse_def() {
+}
+
+void p1_parse_method() {
+}
+
+void p1_parse_module(Artifact *path, Module *root, Token *tok, size_t *pos) {
+
 }
 
 
-
-void compile (Artifact path_in, Artifact path_out) {
-	char *full_path = art_to_str(&path_in, '/');
+void p1_parse_file(Artifact *path, Module *root) {
+	char *full_path = art_to_str(path, '/');
 	FILE *fin = fopen(full_path, "r");
-	free(full_path);
 
-	if (fin == NULL)
+	if (fin == NULL) {
+		printf("Unable to open file %s for reading.", full_path);
+		free(full_path);
 		return;
+	}
 
+	free(full_path);
+	
 	Vector tokens = parse_file(fin);
-
 	fclose(fin);
 
-	full_path = art_to_str(&path_out, '/');
-	FILE *fout = fopen(full_path, "w");
-	free(full_path);
+	for (size_t i = 0; i < tokens.count; i++) {
+		
+	}
 
-	if (fout != NULL) {
-		// Write all tokens
-		for (size_t i = 0; i < tokens.count; i++) {
-			Token *t = vect_get(&tokens, i);
-			if (strcmp(t->data, "\n") != 0)
-				fprintf(fout, "{ line: %d, column: %d, type %d, data: %s }\n", t->line, t->col, t->type, t->data);
-			free(t->data);
-		}
+	for (size_t i = 0; i < tokens.count; i++) {
+		Token *t = vect_get(&tokens, i);
+		free(t->data);
 	}
 	vect_end(&tokens);
+}
+
+void p1_size_structs(Module *root) {
+}
+
+void phase_1(Artifact *path, Module *root) {
+	p1_parse_file(path, root);
+	p1_size_structs(root);
+}
+
+// Phase 2
+
+bool p2_error = false;
+CompData p2_compile_file(Artifact *path, Module *root) {
+	CompData out = cdat_init();
+	return out;
+}
+
+CompData phase_2(Artifact *path, Module *root) {
+	return p2_compile_file(path, root);
+}
+
+void compile (Artifact *path_in, Artifact *path_out) {
+
+	// Root module used for artifact resolution
+	Module root = mod_init("", NULL, true);
+
+	phase_1(path_in, &root);
+	
+	if (p1_error) {
+		printf("Parser encountered errors, stopping.\n");
+		mod_deep_end(&root);
+		return;
+	}
+
+	CompData out = phase_2(path_in, &root);
+	mod_deep_end(&root);
+
+	if (p2_error) {
+		printf("Compiler encountered errors, stopping.\n");
+		cdat_end(&out);
+		return;
+	}
+
+	char *full_path = art_to_str(path_out, '/');
+	FILE *fout = fopen(full_path, "w");
+	
+	if (fout == NULL) {
+		printf("Unable to open output file %s for writing.\n", full_path);
+		free(full_path);
+		cdat_end(&out);
+		return;
+	}
+	
+	free(full_path);
+
+	cdat_write_to_file(&out, fout);
 
 	fclose(fout);
+	cdat_end(&out);
 }
 
 // Entrypoint
@@ -869,7 +949,7 @@ int main(int argc, char ** argv) {
 		out = art_from_str(argv[2], '/');
 	}
 
-	compile(in, out);
+	compile(&in, &out);
 	art_end(&in);
 	art_end(&out);
 
