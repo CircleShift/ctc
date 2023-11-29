@@ -206,7 +206,7 @@ char *art_to_str(Artifact *art, char join) {
 	for (size_t i = 0; i < art->count; i++) {
 		char ** cpy = vect_get(art, i);
 		
-		for(int j = 0; cpy[j] != 0; j++) {
+		for(int j = 0; (*cpy)[j] != 0; j++) {
 			out[out_len] = (*cpy)[j];
 			out_len += 1;
 			out = realloc(out, out_len + 1);
@@ -612,6 +612,9 @@ Token parse_string_literal(int *ch, int *line, int *col, FILE *fin) {
 
 	vect_push(&str, &first);
 
+	if (*ch == first)
+		*ch = fgetc(fin);
+
 	out.data = vect_as_string(&str);
 
 	return out;
@@ -788,7 +791,32 @@ Vector parse_file(FILE *fin) {
 // Compiler funcs
 
 void compile (Artifact path_in, Artifact path_out) {
-	
+	char *full_path = art_to_str(&path_in, '/');
+	FILE *fin = fopen(full_path, "r");
+	free(full_path);
+
+	if (fin == NULL)
+		return;
+
+	Vector tokens = parse_file(fin);
+
+	fclose(fin);
+
+	full_path = art_to_str(&path_out, '/');
+	FILE *fout = fopen(full_path, "w");
+	free(full_path);
+
+	if (fout != NULL) {
+		// Write all tokens
+		for (size_t i = 0; i < tokens.count; i++) {
+			Token *t = vect_get(&tokens, i);
+			fprintf(fout, "{ line: %d, column: %d, type %d, data: %s }\n", t->line, t->col, t->type, t->data);
+			free(t->data);
+		}
+	}
+	vect_end(&tokens);
+
+	fclose(fout);
 }
 
 // Entrypoint
