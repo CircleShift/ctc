@@ -499,7 +499,7 @@ char *KEYTYPES = "uint8,uint16,uint32,uint64,uint,int8,int16,int32,int64,int,flo
 char *RESERVED = "~`!@#$%^&*()[]{}+-=\"\'\\|:;/?>.<,";
 
 char *OPS = "~`!%&|^*/+-=.<>";
-char *MULTI_OPS = "==,&&,||,^^,!==,!&&,!||,!^^,!<,!>,<<,>>,!&,!|,!^,++,--,>==,<==";
+char *MULTI_OPS = "==,&&,||,^^,!==,!&&,!||,!^^,!<,!>,<<,>>,!&,!|,!^,++,--,>==,<==,+=,-=,*=,/=,%=,!=,&=,|=,^=,~=,`=";
 
 char *DELIMS = "()[]{}";
 char *MULTI_DELIMS = ";:#";
@@ -524,7 +524,7 @@ bool in_csv(char *csv, char *match) {
 }
 
 bool is_reserved(char c) {
-	return strchr(MULTI_DELIMS, c) != NULL;
+	return strchr(RESERVED, c) != NULL;
 }
 
 bool is_delim(char *data) {
