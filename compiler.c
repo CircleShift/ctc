@@ -499,7 +499,13 @@ typedef struct {
 
 char *KEYWORDS = "module,export,asm,if,else,loop,label,goto,continue,break,return,import,as,using,struct,method,interface,implements,operator,len,is";
 char *KEYTYPES = "uint8,uint16,uint32,uint64,uint,int8,int16,int32,int64,int,float32,float64,float,comp64,comp,bool,vect,void,type";
+
 char *RESERVED = "~`!@#$%^&*()[]{}+-=\"\'\\|:;/?>.<,";
+
+char *OPS = "~`!%&|^*/+-=.<>";
+char *MULTI_OPS = "==,&&,||,^^,!==,!&&,!||,!^^,!<,!>,<<,>>,!&,!|,!^,++,--,>==,<==";
+
+char *DELIMS = "()[]{}";
 char *MULTI_DELIMS = ";:#";
 
 
@@ -525,7 +531,46 @@ bool is_reserved(char c) {
 	return strchr(MULTI_DELIMS, c) != NULL;
 }
 
+bool is_delim(char *data) {
+	int l = strlen(data);
+	
+	if (l == 1 && strchr(DELIMS, data[0]) != NULL)
+		return true;
+	else if (l == 2) {
+		if (strchr(MULTI_DELIMS, data[0]) != NULL)
+			return (data[1] == data[0] && data[0] != '#') || data[1] == '/';
+		else if (strchr(MULTI_DELIMS, data[1]) != NULL)
+			return (data[0] == '/');
+	}
+	return false;
+}
+
 int token_type(char*data) {
+	int l = strlen(data);
+
+	// Invalid token
+	if (l < 1)
+		return -1;
+	
+	if (is_delim(data))
+		return TT_DELIMIT;
+	else if (is_reserved(data[0])) {
+		if (l == 1) {
+			if (strchr(OPS, data[0]) != NULL)
+				return TT_AUGMENT;
+			else if (data[0] == ',')
+				return TT_SPLITTR;
+		} else if (l == 2 && in_csv(MULTI_OPS, data)) {
+			return TT_AUGMENT;
+		} else if (l == 3 && in_csv(MULTI_OPS, data)) {
+			return TT_AUGMENT;
+		}
+	} else if (in_csv(KEYTYPES, data)) {
+		return TT_KEYTYPE;
+	} else if (in_csv(KEYWORDS, data)) {
+		return TT_KEYWORD;
+	}
+
 	return TT_DEFWORD;
 }
 
