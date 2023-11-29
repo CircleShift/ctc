@@ -819,6 +819,26 @@ bool tnsl_is_boolean() {
 	return false;
 }
 
+int tnsl_find_closing(Vector *tokens, size_t cur) {
+	char closing = 0;
+
+	Token *check = vect_get(tokens, cur);
+
+	if (tok_str_eq(check, "(")) {
+		closing = ')';
+	} else if (tok_str_eq(check, "[")) {
+		closing = ']';
+	} else if (tok_str_eq(check, "{")) {
+		closing = '}';
+	} else if (tok_str_eq(check, "/;") || tok_str_eq(check, ";;")) {
+		closing = ';';
+	}
+
+	int out = cur;
+
+	return out;
+}
+
 // Phase 1 - Module building
 bool p1_error = false;
 
