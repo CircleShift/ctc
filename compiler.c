@@ -28,7 +28,6 @@ Vector vect_init(size_t item_size) {
 	return out;
 }
 
-
 void _vect_grow(Vector *v) {
 	if (v->size / 2 > VECT_MAX_GROW) {
 		v->size += VECT_MAX_GROW;
@@ -71,7 +70,6 @@ void vect_pop(Vector *v) {
 	vect_remove(v, v->count - 1);
 }
 
-
 bool vect_insert(Vector *v, size_t index, void *el) {
 	if (index > v->count) {
 		return false;
@@ -103,7 +101,6 @@ void vect_push(Vector *v, void *el) {
 	vect_insert(v, v->count, el);
 }
 
-
 void *vect_get(Vector *v, size_t index) {
 	if (index >= v->count) {
 		return NULL;
@@ -111,7 +108,6 @@ void *vect_get(Vector *v, size_t index) {
 
 	return v->data + (v->_el_sz * index);
 }
-
 
 Vector vect_clone(Vector *v) {
 	Vector out = {0};
@@ -152,7 +148,6 @@ char *vect_as_string(Vector *v) {
 	((char*)v->data)[v->count * v->_el_sz] = 0;
 	return v->data;
 }
-
 
 void vect_end(Vector *v) {
 	v->_el_sz = 0;
@@ -203,6 +198,7 @@ Artifact art_from_str(const char *str, char split) {
 
 // Joins the string together with the provided character in between
 // must free the returned data after use.
+
 char *art_to_str(Artifact *art, char join) {
 	char *out = malloc(1);
 	int out_len = 0;
@@ -657,7 +653,48 @@ Token parse_numeric_literal(int *next, int *line, int *col, FILE *fin) {
 	return out;
 }
 
-void parse_reserved_tokens(int *first, Vector *out, int *line, int *col, FILE *fin) {
+void parse_reserved_tokens(int *next, Vector *out, int *line, int *col, FILE *fin) {
+	Token tmp = {0};
+	tmp.col = *col;
+	tmp.line = *line;
+
+	Vector res = vect_init(sizeof(char));
+	char add = *next;
+	vect_push(&res, &add);
+
+	*next = fgetc(fin);
+	*col += 1;
+
+	while (*next != EOF) {
+		add = *next;
+		
+		if (!is_reserved(add)) {
+			break;
+		}
+
+		vect_push(&res, &add);
+		int after = token_type(vect_as_string(&res));
+
+		if (after == TT_DEFWORD) {
+			vect_pop(&res);
+			tmp.data = vect_as_string(&res);
+			tmp.type = token_type(tmp.data);
+			vect_push(out, &tmp);
+			
+			res = vect_init(sizeof(char));
+			vect_push(&res, &add);
+			tmp.col = *col;
+		}
+
+		*next = fgetc(fin);
+		*col += 1;
+	}
+	
+	if (res.count > 0) {
+		tmp.data = vect_as_string(&res);
+		tmp.type = token_type(tmp.data);
+		vect_push(out, &tmp);
+	}
 }
 
 Token parse_word_token(int *next, int *line, int *col, FILE *fin) {
@@ -763,6 +800,7 @@ void help() {
 	printf("\tctc [file in]              - compile the given file, writing output assembly in out.asm\n");
 	printf("\tctc [file in] [file out]   - same as before, but write the output assembly to the given filename\n");
 	printf("\t    -h                     - print this output message\n");
+	printf("\t    -v                     - print version information\n");
 	printf("\n");
 }
 
@@ -770,6 +808,9 @@ int main(int argc, char ** argv) {
 	if (argc < 2 || strcmp(argv[1], "-h") == 0) {
 		help();
 		return 1;
+	} else if (strcmp(argv[1], "-v") == 0) {
+		printf("C based TNSL Compiler (CTC) - version 0.1\n");
+		return 0;
 	}
 
 	Artifact in = art_from_str(argv[1], '/');
