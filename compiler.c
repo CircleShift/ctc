@@ -805,11 +805,10 @@ Vector parse_file(FILE *fin) {
 
 #define BT_FUNCTION 0
 #define BT_METHOD 1
-#define BT_INTERFACE 2
-#define BT_MODULE 3
-
-int tnsl_block_type() {
-}
+#define BT_OPERATOR 2
+#define BT_INTERFACE 3
+#define BT_MODULE 4
+#define BT_CONTROL 5
 
 bool tnsl_is_def() {
 	return false;
@@ -822,21 +821,100 @@ bool tnsl_is_boolean() {
 int tnsl_find_closing(Vector *tokens, size_t cur) {
 	char closing = 0;
 
-	Token *check = vect_get(tokens, cur);
+	Token *first = vect_get(tokens, cur);
+	Token *check;
 
-	if (tok_str_eq(check, "(")) {
+	if (tok_str_eq(first, "(")) {
 		closing = ')';
-	} else if (tok_str_eq(check, "[")) {
+	} else if (tok_str_eq(first, "[")) {
 		closing = ']';
-	} else if (tok_str_eq(check, "{")) {
+	} else if (tok_str_eq(first, "{")) {
 		closing = '}';
-	} else if (tok_str_eq(check, "/;") || tok_str_eq(check, ";;")) {
+	} else if (tok_str_eq(first, "/;") || tok_str_eq(first, ";;")) {
 		closing = ';';
+	} else {
+		return -1;
 	}
 
-	int out = cur;
+	cur += 1;
+	int paren = 0, brak = 0, squig = 0, block = 0;
 
-	return out;
+	for(; cur < tokens->count; cur++) {
+		check = vect_get(tokens, cur);
+		if (check->type == TT_DELIMIT) {
+			if (check->data[0] == closing && paren == 0 && brak == 0 && squig == 0 && block == 0) {
+				return cur;
+			}
+
+			switch (check->data[0]) {
+			case '(':
+				paren += 1;
+				break;
+			case '[':
+				brak += 1;
+				break;
+			case '{':
+				squig += 1;
+				break;
+			case ')':
+				paren -= 1;
+				break;
+			case ']':
+				brak -= 1;
+				break;
+			case '}':
+				squig -= 1;
+				break;
+			}
+
+			if (tok_str_eq(check, "/;"))
+				block += 1;
+			else if (tok_str_eq(check, ";/"))
+				block -= 1;
+
+			if (paren < 0 || brak < 0 || squig < 0 || block < 0) {
+				printf("Unmatched closing delimiter at {line %d, col %d, \"%s\"}\n", check->line, check->col, check->data);
+				printf("Looking for closing delimiter for {line %d, col %d, \"%s\"}\n", first->line, first->col, first->data);
+				return -1;
+			}
+		}
+	}
+
+	return -1;
+}
+
+int tnsl_block_type(Vector *tokens, size_t cur) {
+	
+	for (cur++; cur < tokens->count; cur++) {
+		Token *t = vect_get(tokens, cur);
+
+		if (t->type == TT_DEFWORD) {
+			return BT_FUNCTION;
+		} else if (t->type == TT_KEYWORD) {
+			if (tok_str_eq(t, "loop") || tok_str_eq(t, "if") || tok_str_eq(t, "else")) {
+				return BT_CONTROL;
+			} else if (tok_str_eq(t, "export") || tok_str_eq(t, "module")) {
+				return BT_MODULE;
+			} else if (tok_str_eq(t, "method")) {
+				return BT_METHOD;
+			} else if (tok_str_eq(t, "operator")) {
+				printf("WARNING: Operator block not implemented (Found at %d:%d)\n", t->line, t->col);
+				return BT_OPERATOR;
+			} else if (tok_str_eq(t, "interface")) {
+				printf("WARNING: Interface block not implemented (Found at %d:%d)\n", t->line, t->col);
+				return BT_INTERFACE;
+			} else {
+				printf("ERROR: Invalid keyword when parsing block (%s at %d:%d)\n", t->data, t->line, t->col);
+				return -1;
+			}
+		} else if (t->type == TT_DELIMIT) {
+			int next = tnsl_find_closing(tokens, cur);
+			if (next < 0)
+				return -1;
+			cur = next;
+		}
+	}
+	return -1;
 }
 
 // Phase 1 - Module building
