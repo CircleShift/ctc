@@ -101,6 +101,16 @@ void vect_push(Vector *v, void *el) {
 	vect_insert(v, v->count, el);
 }
 
+void vect_push_string(Vector *v, char *str) {
+	if (v->_el_sz != sizeof(char)) {
+		return;
+	}
+
+	for (size_t i = 0; str[i] != 0; i++) {
+		vect_insert(v, v->count, str + i);
+	}
+}
+
 void *vect_get(Vector *v, size_t index) {
 	if (index >= v->count) {
 		return NULL;
@@ -308,9 +318,9 @@ typedef struct {
 	int location; // negative for on stack, positive or zero for in register
 } Variable;
 
-#define PTYPE_PTR 0
-#define PTYPE_REF 1
-#define PTYPE_ARR 2
+#define PTYPE_PTR -1
+#define PTYPE_REF 0
+#define PTYPE_ARR 1
 
 typedef struct {
 	char *name;
@@ -910,7 +920,197 @@ Vector parse_file(FILE *fin) {
 #define BT_MODULE 4
 #define BT_CONTROL 5
 
+unsigned long tnsl_parse_binary(char *data) {
+	unsigned long out = 0;
+	
+	for(size_t i = 2; data[i] != 0; i++) {
+		if (data[i] != '0' && data[i] != '1') {
+			return out;
+		}
+		
+		out = out << 1;
 
+		if(data[i] == 1)
+			out++;
+	}
+
+	return out;
+}
+
+unsigned long tnsl_parse_octal(char *data) {
+	unsigned long out = 0;
+	
+	for(size_t i = 2; data[i] != 0; i++) {
+		if (data[i] < '0' || data[i] > '7') {
+			return out;
+		}
+
+		out = out << 3;
+		out += (data[i] - '0');
+	}
+
+	return out;
+}
+
+unsigned long tnsl_parse_decimal(char *data) {
+	unsigned long out = 0;
+
+	for(size_t i = 0; data[i] != 0; i++) {
+		if (data[i] < '0' || data[i] > '9')
+			return out;
+
+		out = out * 10;
+		out += (data[i] - '0');
+	}
+
+	return out;
+}
+
+unsigned long tnsl_parse_hex(char *data) {
+	unsigned long out = 0;
+
+	for(size_t i = 2; data[i] != 0; i++) {
+		char tmp = data[i];
+
+		if (tmp >= 'a') {
+			tmp -= ('a' - 10);
+		} else if (tmp >= 'A') {
+			tmp -= ('A' - 10);
+		} else if (tmp > '0') {
+			tmp -= '0';
+		}
+
+		if (tmp > 15) {
+			return out;
+		}
+
+		out = out << 4;
+		out += tmp;
+	}
+
+	return out;
+}
+
+unsigned long tnsl_parse_number (Token *numeric_literal) {
+	int l = strlen(numeric_literal->data);
+
+	if (l > 2 && numeric_literal->data[0] == '0' && numeric_literal->data[1] > '9') {
+		switch (numeric_literal->data[1]) {
+			case 'B':
+			case 'b':
+				return tnsl_parse_binary(numeric_literal->data);
+			case 'O':
+			case 'o':
+				return tnsl_parse_octal(numeric_literal->data);
+			case 'X':
+			case 'x':
+				return tnsl_parse_hex(numeric_literal->data);
+			default:
+				printf("ERROR: Unknown prefix for number (0%c) at %d:%d\n", numeric_literal->data[1], numeric_literal->line, numeric_literal->col);
+				return 0;
+		}
+	}
+	return tnsl_parse_decimal(numeric_literal->data);
+}
+
+Variable tnsl_parse_type(Vector *tokens, size_t cur) {
+	Vector ftn = vect_init(sizeof(char));
+	Vector ptr = vect_init(sizeof(int));
+	
+	Variable err = {0};
+	err.name = NULL;
+	err.location = -1;
+	err.type = NULL;
+
+	int add = 0;
+
+	// Pre loop
+	for (; cur < tokens->count; cur++) {
+		Token *t = vect_get(tokens, cur);
+		if (t->type == TT_KEYTYPE || t->type == TT_DEFWORD) {
+			break;
+		} else if (t->type == TT_AUGMENT) {
+			if (tok_str_eq(t, "~")) {
+				add = PTYPE_PTR;
+				vect_push(&ptr, &add);
+			} else {
+				vect_end(&ftn);
+				vect_end(&ptr);
+				return err;
+			}
+		} else if (t->type == TT_DELIMIT) {
+			if (tok_str_eq(t, "{")) {
+				cur++;
+				t = vect_get(tokens, cur);
+				if (t->type == TT_DELIMIT && tok_str_eq(t, "}")) {
+					add = PTYPE_ARR;
+				} else if (t->type == TT_LITERAL && t->data[0] >= '0' && t->data[0] <= '9') {
+					add = tnsl_parse_number(t);
+					vect_push(&ptr, &add);
+					cur++;
+					t = vect_get(tokens, cur);
+					if (t->type != TT_DELIMIT || !tok_str_eq(t, "}")) {
+						vect_end(&ftn);
+						vect_end(&ptr);
+						return err;
+					}
+				}
+				vect_push(&ptr, &add);
+			} else {
+				vect_end(&ftn);
+				vect_end(&ptr);
+				return err;
+			}
+		} else {
+			vect_end(&ftn);
+			vect_end(&ptr);
+			return err;
+		}
+	}
+
+	// ftn loop
+	Token *t = vect_get(tokens, cur);
+	if (t->type == TT_KEYTYPE) {
+		vect_push_string(&ftn, t->data);
+		cur++;
+	} else if (t->type == TT_DEFWORD) {
+		for(; cur < tokens->count; cur++) {
+			t = vect_get(tokens, cur);
+
+			if (t->type == TT_DEFWORD) {
+				vect_push_string(&ftn, t->data);	
+			} else {
+				vect_end(&ftn);
+				vect_end(&ptr);
+				return err;
+			}
+
+			cur++;
+			t = vect_get(tokens, cur);
+
+			if (t != NULL && t->type == TT_AUGMENT && tok_str_eq(t, ".")) { 
+				vect_push_string(&ftn, t->data);
+			} else {
+				break;
+			}
+		}
+	}
+
+	t = vect_get(tokens, cur);
+	if (tok_str_eq(t, "`")) {
+		add = PTYPE_REF;
+		vect_push(&ptr, &add);
+	}
+
+	Variable out = {0};
+	
+	out.name = vect_as_string(&ftn);
+	out.type = NULL;
+	out.location = cur;
+	out.ptr_chain = ptr;
+
+	return out;
+}
 
 bool tnsl_is_def() {
 	return false;
