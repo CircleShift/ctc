@@ -351,6 +351,33 @@ void typ_end(Type *t) {
 	vect_end(&(t->members));
 }
 
+Type TYP_INBUILT[] = {
+	{"uint8", 1, {0}, NULL},
+	{"uint16", 2, {0}, NULL},
+	{"uint32", 4, {0}, NULL},
+	{"uint64", 8, {0}, NULL},
+	{"uint", 8, {0}, NULL},
+	{"int8", 1, {0}, NULL},
+	{"int16", 2, {0}, NULL},
+	{"int32", 4, {0}, NULL},
+	{"int64", 8, {0}, NULL},
+	{"int", 8, {0}, NULL},
+	{"float32", 4, {0}, NULL},
+	{"float64", 8, {0}, NULL},
+	{"float", 8, {0}, NULL},
+	{"bool", 1, {0}, NULL},
+	{"void", 8, {0}, NULL},
+};
+
+Type *typ_get_inbuilt(char *name) {
+	for (int i = 0; i < sizeof(TYP_INBUILT)/sizeof(Type); i++) {
+		if (strcmp(TYP_INBUILT[i].name, name) == 0) {
+			return &(TYP_INBUILT[i]);
+		}
+	}
+	return NULL;
+}
+
 
 
 // Variables
@@ -446,6 +473,79 @@ Module mod_init(char *name, Module *parent, bool export) {
 	out.submods = vect_init(sizeof(Module));
 
 	return out;
+}
+
+#define FT_VAR 0
+#define FT_FUN 1
+#define FT_TYP 2
+
+void *mod_find_rec(Module *mod, Artifact *art, size_t sub, int find_type) {
+	// Not at end of art, need to go deeper
+	if (sub + 1 < art->count) {
+		char **to_check = vect_get(art, sub);
+		void *out = NULL;
+		for (size_t i = 0; i < mod->submods.count; i++) {
+			Module *m = vect_get(&(mod->submods), i);
+			if (strcmp(m->name, *to_check)) {
+				out = mod_find_rec(m, art, sub + 1, find_type);
+				break;
+			}
+		}
+
+		if (out != NULL)
+			return out;
+	} else if (art->count > 0) {
+		Vector *search = NULL;
+		char **to_check = vect_get(art, art->count - 1);
+
+		switch(find_type) {
+		case FT_VAR:
+			search = &(mod->vars);
+			break;
+		case FT_FUN:
+			search = &(mod->funcs);
+			break;
+		case FT_TYP:
+			search = &(mod->types);
+			break;
+		default:
+			printf("FATAL: Compiler error, mod_find_rec called with find_type value %d\n", find_type);
+			return NULL;
+		}
+
+		for (size_t i = 0; i < search->count;i++) {
+			void *e = vect_get(search, i);
+			if (find_type == FT_VAR && strcmp(((Variable *)e)->name, *to_check)) {
+				return e;
+			} else if (find_type == FT_FUN && strcmp(((Function *)e)->name, *to_check)) {
+				return e;
+			} else if (find_type == FT_TYP && strcmp(((Type *)e)->name, *to_check)) {
+				return e;
+			}
+		}
+	}
+
+	if (mod->parent == NULL || sub > 0)
+		return NULL;
+
+	return mod_find_rec(mod->parent, art, 0, find_type);
+}
+
+Type *mod_find_type(Module *mod, Artifact *art) {
+	Type *out = mod_find_rec(mod, art, 0, FT_TYP);
+	if (out == NULL && art->count == 1) {
+		char ** name = vect_get(art, 0);
+		return typ_get_inbuilt(*name);
+	}
+	return out;
+}
+
+Function *mod_find_func(Module *mod, Artifact *art) {
+	return mod_find_rec(mod, art, 0, FT_FUN);
+}
+
+Variable *mod_find_var(Module *mod, Artifact *art) {
+	return mod_find_rec(mod, art, 0, FT_VAR);
 }
 
 // Recursive end of all modules. To be called at the end
@@ -809,6 +909,8 @@ Vector parse_file(FILE *fin) {
 #define BT_INTERFACE 3
 #define BT_MODULE 4
 #define BT_CONTROL 5
+
+
 
 bool tnsl_is_def() {
 	return false;
