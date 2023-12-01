@@ -676,7 +676,7 @@ int token_type(char*data) {
 		if (l == 1) {
 			if (strchr(OPS, data[0]) != NULL)
 				return TT_AUGMENT;
-			else if (data[0] == ',')
+			else if (data[0] == ',' || data[0] == ';' || data[0] == ':')
 				return TT_SPLITTR;
 		} else if (l == 2 && in_csv(MULTI_OPS, data)) {
 			return TT_AUGMENT;
@@ -1006,7 +1006,7 @@ unsigned long tnsl_parse_number (Token *numeric_literal) {
 			case 'x':
 				return tnsl_parse_hex(numeric_literal->data);
 			default:
-				printf("ERROR: Unknown prefix for number (0%c) at %d:%d\n", numeric_literal->data[1], numeric_literal->line, numeric_literal->col);
+				printf("ERROR: Unknown prefix for number (0%c) at %d:%d\n\n", numeric_literal->data[1], numeric_literal->line, numeric_literal->col);
 				return 0;
 		}
 	}
@@ -1112,7 +1112,20 @@ Variable tnsl_parse_type(Vector *tokens, size_t cur) {
 	return out;
 }
 
-bool tnsl_is_def() {
+bool tnsl_is_def(Vector *tokens, size_t cur) {
+	Variable to_free = tnsl_parse_type(tokens, cur);
+	
+	if (to_free.name == NULL) {
+		return false;
+	}
+
+	free(to_free.name);
+	vect_end(&(to_free.ptr_chain));
+
+	Token *next = vect_get(tokens, to_free.location);
+	if (next != NULL && next->type == TT_DEFWORD) {
+		return true;
+	}
 	return false;
 }
 
@@ -1176,7 +1189,7 @@ int tnsl_find_closing(Vector *tokens, size_t cur) {
 
 			if (paren < 0 || brak < 0 || squig < 0 || block < 0) {
 				printf("Unmatched closing delimiter at {line %d, col %d, \"%s\"}\n", check->line, check->col, check->data);
-				printf("Looking for closing delimiter for {line %d, col %d, \"%s\"}\n", first->line, first->col, first->data);
+				printf("Looking for closing delimiter for {line %d, col %d, \"%s\"}\n\n", first->line, first->col, first->data);
 				return -1;
 			}
 		}
@@ -1200,13 +1213,13 @@ int tnsl_block_type(Vector *tokens, size_t cur) {
 			} else if (tok_str_eq(t, "method")) {
 				return BT_METHOD;
 			} else if (tok_str_eq(t, "operator")) {
-				printf("WARNING: Operator block not implemented (Found at %d:%d)\n", t->line, t->col);
+				printf("WARNING: Operator block not implemented (Found at %d:%d)\n\n", t->line, t->col);
 				return BT_OPERATOR;
 			} else if (tok_str_eq(t, "interface")) {
-				printf("WARNING: Interface block not implemented (Found at %d:%d)\n", t->line, t->col);
+				printf("WARNING: Interface block not implemented (Found at %d:%d)\n\n", t->line, t->col);
 				return BT_INTERFACE;
 			} else {
-				printf("ERROR: Invalid keyword when parsing block (%s at %d:%d)\n", t->data, t->line, t->col);
+				printf("ERROR: Invalid keyword when parsing block (%s at %d:%d)\n\n", t->data, t->line, t->col);
 				return -1;
 			}
 		} else if (t->type == TT_DELIMIT) {
@@ -1222,13 +1235,89 @@ int tnsl_block_type(Vector *tokens, size_t cur) {
 // Phase 1 - Module building
 bool p1_error = false;
 
-void p1_parse_def() {
+void p1_parse_struct(Module *add, Vector *tokens, size_t *pos) {
+	Token *s = vect_get(tokens, *pos);
+	Token *t = vect_get(tokens, *pos + 1);
+	if (tok_str_eq(s, "struct") == false) {
+		printf("COMPILER ERROR: p1_parse_struct was called on a non-struct token. Aborting.\n\n");
+		p1_error = true;
+		return;
+	} else if (t == NULL || t->type != TT_DEFWORD) {
+		printf("ERROR: Expected a user defined name after 'struct' keyword %d:%d\n\n", s->line, s->col);
+		p1_error = true;
+		return;
+	}
+
+	Type to_add = typ_init(t->data, NULL);
+
+	*pos += 2;
+	int closing = tnsl_find_closing(tokens, *pos);
+
+	if(closing < 0) {
+		printf("ERROR: Expected a member list (Types and member names enclosed with '{}') when defining struct.\n");
+		printf("       Place one after token \"%s\" line %d column %d\n\n", t->data, t->line, t->col);
+		typ_end(&to_add);
+		return;
+	}
+	
+	Variable current_type = {0};
+	current_type.name = NULL;
+
+	for(*pos += 1; *pos < closing; *pos += 1) {
+		if(tnsl_is_def(tokens, *pos)) {
+			if(current_type.name != NULL) {
+				free(current_type.name);
+				vect_end(&(current_type.ptr_chain));
+			}
+			current_type = tnsl_parse_type(tokens, *pos);
+			*pos = current_type.location;
+		}
+
+		t = vect_get(tokens, *pos);
+		
+		if (t->type != TT_DEFWORD) {
+			printf("ERROR: Unexpected token in member list (was looking for a user defined name)\n");
+			printf("       \"%s\" line %d column %d\n\n", t->data, t->line, t->col);
+			p1_error = true;
+			break;
+		}
+
+		// The name of the variable is "<User defined name> <Dot deliniated type string>"
+		// this is specifically so that types may be defined out of order, and will be
+		// cleaned up when p1_size_structs is called.
+		Variable member = var_copy(&current_type);
+		member.location = -1;
+		Vector name_type = vect_from_string(t->data);
+		vect_push_string(&name_type, " ");
+		vect_push_string(&name_type, member.name);
+		free(member.name);
+		member.name = vect_as_string(&name_type);
+
+		// Add the member to the struct (the member's type will be resolved later)
+		vect_push(&(to_add.members), &member);
+		
+
+		*pos += 1;
+		t = vect_get(tokens, *pos);
+
+		if (tok_str_eq(t, "}")) {
+			*pos -= 1;
+		} else if (tok_str_eq(t, ",") != true) {
+			printf("ERROR: Unexpected token in member list (was looking for a comma to separate members)\n");
+			printf("       \"%s\" line %d column %d\n\n", t->data, t->line, t->col);
+			p1_error = true;
+			break;
+		}
+	}
+
+	*pos = closing + 1;
+	vect_push(&(add->types), &to_add);
 }
 
-void p1_parse_method() {
+void p1_parse_function() {
 }
 
-void p1_parse_module(Artifact *path, Module *root, Token *tok, size_t *pos) {
+void p1_parse_module(Artifact *path, Module *root, Vector *tok, size_t *pos) {
 
 }
 
@@ -1238,7 +1327,7 @@ void p1_parse_file(Artifact *path, Module *root) {
 	FILE *fin = fopen(full_path, "r");
 
 	if (fin == NULL) {
-		printf("Unable to open file %s for reading.", full_path);
+		printf("Unable to open file %s for reading.\n\n", full_path);
 		free(full_path);
 		return;
 	}
@@ -1287,7 +1376,7 @@ void compile (Artifact *path_in, Artifact *path_out) {
 	phase_1(path_in, &root);
 	
 	if (p1_error) {
-		printf("Parser encountered errors, stopping.\n");
+		printf("Parser encountered errors, stopping.\n\n");
 		mod_deep_end(&root);
 		return;
 	}
@@ -1296,7 +1385,7 @@ void compile (Artifact *path_in, Artifact *path_out) {
 	mod_deep_end(&root);
 
 	if (p2_error) {
-		printf("Compiler encountered errors, stopping.\n");
+		printf("Compiler encountered errors, stopping.\n\n");
 		cdat_end(&out);
 		return;
 	}
@@ -1305,7 +1394,7 @@ void compile (Artifact *path_in, Artifact *path_out) {
 	FILE *fout = fopen(full_path, "w");
 	
 	if (fout == NULL) {
-		printf("Unable to open output file %s for writing.\n", full_path);
+		printf("Unable to open output file %s for writing.\n\n", full_path);
 		free(full_path);
 		cdat_end(&out);
 		return;
