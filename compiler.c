@@ -1242,14 +1242,16 @@ bool p1_error = false;
 
 void p1_parse_params(Vector *var_list, Vector *tokens, size_t *pos) {
 	int end = tnsl_find_closing(tokens, *pos);
+	Token *t = vect_get(tokens, *pos);
 
-	if (end < 0)
+	if (end < 0) {
+		printf("ERROR: Could not find closing when parsing parameter list \"%s\" (%d:%d)\n", t->data, t->line, t->col);
 		return;
+	}
 	
 	Variable current_type = {0};
 	current_type.name = NULL;
 	current_type.type = NULL;
-	Token *t = NULL;
 
 	for(*pos += 1; *pos < end; *pos += 1) {
 		if(tnsl_is_def(tokens, *pos)) {
@@ -1302,10 +1304,34 @@ void p1_parse_params(Vector *var_list, Vector *tokens, size_t *pos) {
 		vect_end(&(current_type.ptr_chain));
 	}
 
-	*pos = end + 1;
+	*pos = end;
 }
 
+void p1_parse_type_list(Vector *var_list, Vector *tokens, size_t *pos) {
+	int end = tnsl_find_closing(tokens, *pos);
+	Token *t = vect_get(tokens, *pos);
 
+	if (end < 0) {
+		printf("ERROR: Could not find closing when parsing parameter list \"%s\" (%d:%d)\n", t->data, t->line, t->col);
+		return;
+	}
+
+	for(*pos += 1; pos < end;) {
+		Variable to_add = tnsl_parse_type(tokens, *pos);
+
+		if(to_add.location < 0) {
+			t = vect_get(tokens, *pos);
+			printf("ERROR: Could not parse type when in type list ~(%d:%d)\n", t->line, t->col);
+			break;
+		}
+
+		*pos = to_add.location;
+		to_add.location = -1;
+		vect_push(var_list, &to_add);
+	}
+
+	*pos = end;
+}
 
 void p1_parse_struct(Module *add, Vector *tokens, size_t *pos) {
 	Token *s = vect_get(tokens, *pos);
@@ -1337,6 +1363,7 @@ void p1_parse_struct(Module *add, Vector *tokens, size_t *pos) {
 	vect_push(&(add->types), &to_add);
 }
 
+
 void p1_parse_function(Module *root, Vector *tokens, size_t *pos) {
 	int end = tnsl_find_closing(tokens, *pos);
 
@@ -1345,9 +1372,60 @@ void p1_parse_function(Module *root, Vector *tokens, size_t *pos) {
 	
 	Function out = func_init("", root);
 
-	for (size_t i = 0; i < end; i++) {
-		
+	for (*pos += 1; *pos < end; *pos += 1) {
+		Token *t = vect_get(tokens, *pos);
+		if(t->type == TT_DEFWORD) {
+			free(out.name);
+			Vector copy = vect_from_string(t->data);
+			out.name = vect_as_string(&copy);
+		} else if (tok_str_eq(t, "(")) {
+			p1_parse_params(&(out.inputs), tokens, pos);
+		} else if (tok_str_eq(t, "[")) {
+			p1_parse_type_list(&(out.outputs), tokens, pos);
+		} else {
+			break;
+		}
 	}
+
+	vect_push(&(root->funcs), &out);
+	*pos = end;
+}
+
+void p1_parse_method(Module *root, Vector *tokens, size_t *pos) {
+	int end = tnsl_find_closing(tokens, *pos);
+	
+	if (end < 0)
+		return;
+
+	*pos += 2;
+	Token *t = vect_get(tokens, *pos);
+
+	if (t == NULL || t->type != TT_DEFWORD) {
+		printf("ERROR: Expected user defined type while parsing method block. \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+		*pos = end;
+		return;
+	}
+
+	Vector mod_name = vect_from_string("_#");
+	vect_push_string(&mod_name, t->data);
+	Module out = mod_init(vect_as_string(&mod_name), root, root->exported);
+	vect_end(&mod_name);
+
+	for (*pos += 1; *pos < end; *pos += 1) {
+		t = vect_get(tokens, *pos);
+		if (tok_str_eq(t, "/;") || tok_str_eq(t, ";;")) {
+			if (tnsl_block_type(tokens, *pos) == BT_FUNCTION) {
+				p1_parse_function(&out, tokens, pos);
+			}
+			t = vect_get(tokens, *pos);
+			if(tok_str_eq(t, ";;"))
+				*pos -= 1;
+		}
+	}
+
+	vect_push(&(root->submods), &out);
+
+	*pos = end;
 }
 
 void p1_parse_module(Artifact *path, Module *root, Vector *tokens, size_t *pos) {
@@ -1381,6 +1459,7 @@ void p1_parse_file(Artifact *path, Module *root) {
 				p1_parse_module(path, root, &tokens, &i);
 				break;
 			case BT_METHOD:
+				p1_parse_method(root, &tokens, &i);
 			case BT_INTERFACE:
 				printf("ERROR: Not implemented \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
 				break;
