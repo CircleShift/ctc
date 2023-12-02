@@ -542,11 +542,16 @@ void *mod_find_rec(Module *mod, Artifact *art, size_t sub, int find_type) {
 }
 
 Type *mod_find_type(Module *mod, Artifact *art) {
-	Type *out = mod_find_rec(mod, art, 0, FT_TYP);
-	if (out == NULL && art->count == 1) {
+	Type *out = NULL;
+	
+	if (art->count == 1) {
 		char ** name = vect_get(art, 0);
-		return typ_get_inbuilt(*name);
+		out = typ_get_inbuilt(*name);
 	}
+
+	if (out == NULL)
+		out = mod_find_rec(mod, art, 0, FT_TYP);
+	
 	return out;
 }
 
@@ -1235,35 +1240,18 @@ int tnsl_block_type(Vector *tokens, size_t cur) {
 // Phase 1 - Module building
 bool p1_error = false;
 
-void p1_parse_struct(Module *add, Vector *tokens, size_t *pos) {
-	Token *s = vect_get(tokens, *pos);
-	Token *t = vect_get(tokens, *pos + 1);
-	if (tok_str_eq(s, "struct") == false) {
-		printf("COMPILER ERROR: p1_parse_struct was called on a non-struct token. Aborting.\n\n");
-		p1_error = true;
-		return;
-	} else if (t == NULL || t->type != TT_DEFWORD) {
-		printf("ERROR: Expected a user defined name after 'struct' keyword %d:%d\n\n", s->line, s->col);
-		p1_error = true;
-		return;
-	}
+void p1_parse_params(Vector *var_list, Vector *tokens, size_t *pos) {
+	int end = tnsl_find_closing(tokens, *pos);
 
-	Type to_add = typ_init(t->data, NULL);
-
-	*pos += 2;
-	int closing = tnsl_find_closing(tokens, *pos);
-
-	if(closing < 0) {
-		printf("ERROR: Expected a member list (Types and member names enclosed with '{}') when defining struct.\n");
-		printf("       Place one after token \"%s\" line %d column %d\n\n", t->data, t->line, t->col);
-		typ_end(&to_add);
+	if (end < 0)
 		return;
-	}
 	
 	Variable current_type = {0};
 	current_type.name = NULL;
+	current_type.type = NULL;
+	Token *t = NULL;
 
-	for(*pos += 1; *pos < closing; *pos += 1) {
+	for(*pos += 1; *pos < end; *pos += 1) {
 		if(tnsl_is_def(tokens, *pos)) {
 			if(current_type.name != NULL) {
 				free(current_type.name);
@@ -1294,14 +1282,13 @@ void p1_parse_struct(Module *add, Vector *tokens, size_t *pos) {
 		member.name = vect_as_string(&name_type);
 
 		// Add the member to the struct (the member's type will be resolved later)
-		vect_push(&(to_add.members), &member);
-		
+		vect_push(var_list, &member);
 
 		*pos += 1;
 		t = vect_get(tokens, *pos);
 
-		if (tok_str_eq(t, "}")) {
-			*pos -= 1;
+		if (*pos >= end) {
+			break;
 		} else if (tok_str_eq(t, ",") != true) {
 			printf("ERROR: Unexpected token in member list (was looking for a comma to separate members)\n");
 			printf("       \"%s\" line %d column %d\n\n", t->data, t->line, t->col);
@@ -1309,15 +1296,61 @@ void p1_parse_struct(Module *add, Vector *tokens, size_t *pos) {
 			break;
 		}
 	}
+	
+	if (current_type.name != NULL) {
+		free(current_type.name);
+		vect_end(&(current_type.ptr_chain));
+	}
 
-	*pos = closing + 1;
+	*pos = end + 1;
+}
+
+
+
+void p1_parse_struct(Module *add, Vector *tokens, size_t *pos) {
+	Token *s = vect_get(tokens, *pos);
+	Token *t = vect_get(tokens, *pos + 1);
+	if (tok_str_eq(s, "struct") == false) {
+		printf("COMPILER ERROR: p1_parse_struct was called on a non-struct token. Aborting.\n\n");
+		p1_error = true;
+		return;
+	} else if (t == NULL || t->type != TT_DEFWORD) {
+		printf("ERROR: Expected a user defined name after 'struct' keyword %d:%d\n\n", s->line, s->col);
+		p1_error = true;
+		return;
+	}
+
+	Type to_add = typ_init(t->data, NULL);
+
+	*pos += 2;
+	int closing = tnsl_find_closing(tokens, *pos);
+	t = vect_get(tokens, *pos);
+
+	if(closing < 0 || tok_str_eq(t, "{") != true) {
+		printf("ERROR: Expected a member list (Types and member names enclosed with '{}') when defining struct.\n");
+		printf("       Place one after token \"%s\" line %d column %d\n\n", t->data, t->line, t->col);
+		typ_end(&to_add);
+		return;
+	}
+	
+	p1_parse_params(&(to_add.members), tokens, pos);
 	vect_push(&(add->types), &to_add);
 }
 
-void p1_parse_function() {
+void p1_parse_function(Module *root, Vector *tokens, size_t *pos) {
+	int end = tnsl_find_closing(tokens, *pos);
+
+	if (end < 0)
+		return;
+	
+	Function out = func_init("", root);
+
+	for (size_t i = 0; i < end; i++) {
+		
+	}
 }
 
-void p1_parse_module(Artifact *path, Module *root, Vector *tok, size_t *pos) {
+void p1_parse_module(Artifact *path, Module *root, Vector *tokens, size_t *pos) {
 
 }
 
@@ -1338,7 +1371,40 @@ void p1_parse_file(Artifact *path, Module *root) {
 	fclose(fin);
 
 	for (size_t i = 0; i < tokens.count; i++) {
-		
+		Token *t = vect_get(&tokens, i);
+		if (tok_str_eq(t, "/;") || tok_str_eq(t, ";;")) {
+			switch(tnsl_block_type(&tokens, i)) {
+			case BT_FUNCTION:
+				p1_parse_function(root, &tokens, &i);
+				break;
+			case BT_MODULE:
+				p1_parse_module(path, root, &tokens, &i);
+				break;
+			case BT_METHOD:
+			case BT_INTERFACE:
+				printf("ERROR: Not implemented \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+				break;
+			case BT_CONTROL:
+			case BT_OPERATOR:
+			default:
+				printf("ERROR: Unexpected token \"%s\" at file root (%d:%d)\n\n", t->data, t->line, t->col);
+				break;
+			}
+			
+			t = vect_get(&tokens, i);
+
+			if (tok_str_eq(t, "/;")) {
+				int chk = tnsl_find_closing(&tokens, i);
+				if (chk < 0)
+					printf("ERROR: Could not find closing for \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+				else
+					i = chk;
+			} else if (tok_str_eq(t, ";;")) {
+				i--;
+			}
+		} else if (tok_str_eq(t, "struct")) {
+			p1_parse_struct(root, &tokens, &i);
+		}
 	}
 
 	for (size_t i = 0; i < tokens.count; i++) {
@@ -1349,6 +1415,7 @@ void p1_parse_file(Artifact *path, Module *root) {
 }
 
 void p1_size_structs(Module *root) {
+
 }
 
 void phase_1(Artifact *path, Module *root) {
