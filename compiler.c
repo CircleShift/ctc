@@ -1028,6 +1028,24 @@ unsigned long tnsl_parse_number (Token *numeric_literal) {
 	return tnsl_parse_decimal(numeric_literal->data);
 }
 
+Token *tnsl_find_last_token(Vector *tokens, size_t pos) {
+	if (pos >= tokens->count && tokens->count > 0)
+		return vect_get(tokens, tokens->count - 1);
+	else if (tokens->count > 0)
+		return vect_get(tokens, pos);
+	return NULL;
+}
+
+int tnsl_next_non_nl(Vector *tokens, size_t pos) {
+	Token *t = vect_get(tokens, ++pos);
+
+	while (t != NULL && tok_str_eq(t, "\n")) {
+		t = vect_get(tokens, ++pos);
+	}
+
+	return pos;
+}
+
 Variable tnsl_parse_type(Vector *tokens, size_t cur) {
 	Vector ftn = vect_init(sizeof(char));
 	Vector ptr = vect_init(sizeof(int));
@@ -1251,13 +1269,6 @@ int tnsl_block_type(Vector *tokens, size_t cur) {
 	return -1;
 }
 
-Token *tnsl_find_last_token(Vector *tokens, size_t pos) {
-	if (pos >= tokens->count && tokens->count > 0)
-		return vect_get(tokens, tokens->count - 1);
-	else if (tokens->count > 0)
-		return vect_get(tokens, pos);
-	return NULL;
-}
 
 // Phase 1 - Module building
 bool p1_error = false;
@@ -1276,8 +1287,11 @@ void p1_parse_params(Vector *var_list, Vector *tokens, size_t *pos) {
 	current_type.name = NULL;
 	current_type.type = NULL;
 
-	for(*pos += 1; *pos < end; *pos += 1) {
-		if(tnsl_is_def(tokens, *pos)) {
+	for(*pos = tnsl_next_non_nl(tokens, *pos); *pos < end; *pos = tnsl_next_non_nl(tokens, *pos)) {
+		size_t next = tnsl_next_non_nl(tokens, *pos);
+		t = vect_get(tokens, tnsl_next_non_nl(tokens, *pos));
+
+		if(!tok_str_eq(t, ",") && next < end) {
 			if(current_type.name != NULL) {
 				free(current_type.name);
 				vect_end(&(current_type.ptr_chain));
@@ -1288,8 +1302,13 @@ void p1_parse_params(Vector *var_list, Vector *tokens, size_t *pos) {
 
 		t = vect_get(tokens, *pos);
 		
-		if (t->type != TT_DEFWORD) {
-			printf("ERROR: Unexpected token in member list (was looking for a user defined name)\n");
+		if (current_type.name == NULL) {
+			printf("ERROR: Expected a type before the first member/parameter\n");
+			printf("       \"%s\" line %d column %d\n\n", t->data, t->line, t->col);
+			p1_error = true;
+			break;
+		} else if (t->type != TT_DEFWORD) {
+			printf("ERROR: Unexpected token in member/parameter list (was looking for a user defined name)\n");
 			printf("       \"%s\" line %d column %d\n\n", t->data, t->line, t->col);
 			p1_error = true;
 			break;
@@ -1309,7 +1328,7 @@ void p1_parse_params(Vector *var_list, Vector *tokens, size_t *pos) {
 		// Add the member to the struct (the member's type will be resolved later)
 		vect_push(var_list, &member);
 
-		*pos += 1;
+		*pos = tnsl_next_non_nl(tokens, *pos);
 		t = vect_get(tokens, *pos);
 
 		if (*pos >= end) {
