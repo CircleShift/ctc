@@ -44,7 +44,6 @@ void _vect_shrink(Vector *v) {
 	}
 }
 
-
 bool vect_remove(Vector *v, size_t index) {
 	if (index >= v->count) {
 		return false;
@@ -143,7 +142,7 @@ Vector vect_from_string(char *s) {
 
 	size_t i = 0;
 	while(s[i] != 0) {
-		vect_push(&out, s + i);
+		vect_push(&out, s++);
 	}
 
 	return out;
@@ -252,6 +251,13 @@ void art_add_str(Artifact *art, char *str) {
 	Vector copy = vect_from_string(str);
 	char * copy_ptr = vect_as_string(&copy);
 	vect_push(art, &copy_ptr);
+}
+
+// a = a + b
+void art_add_art(Artifact *a, Artifact *b) {
+	for(size_t i = 0; i < b->count; i++) {
+		art_add_str(a, *(char **)vect_get(b, i));
+	}
 }
 
 // Frees all strings in the artifact,
@@ -605,6 +611,8 @@ typedef struct {
 } Token;
 
 bool tok_str_eq(Token *tok, const char *cmp) {
+	if (tok == NULL)
+		return false;
 	return strcmp(tok->data, cmp) == 0;
 }
 
@@ -924,6 +932,7 @@ Vector parse_file(FILE *fin) {
 #define BT_INTERFACE 3
 #define BT_MODULE 4
 #define BT_CONTROL 5
+#define BT_LAMBDA 6
 
 unsigned long tnsl_parse_binary(char *data) {
 	unsigned long out = 0;
@@ -1102,9 +1111,10 @@ Variable tnsl_parse_type(Vector *tokens, size_t cur) {
 	}
 
 	t = vect_get(tokens, cur);
-	if (tok_str_eq(t, "`")) {
+	if (t != NULL && tok_str_eq(t, "`")) {
 		add = PTYPE_REF;
 		vect_push(&ptr, &add);
+		cur++;
 	}
 
 	Variable out = {0};
@@ -1207,8 +1217,10 @@ int tnsl_block_type(Vector *tokens, size_t cur) {
 	
 	for (cur++; cur < tokens->count; cur++) {
 		Token *t = vect_get(tokens, cur);
-
-		if (t->type == TT_DEFWORD) {
+		
+		if (tok_str_eq(t, "\n")) {
+			return BT_LAMBDA;
+		} else if (t->type == TT_DEFWORD) {
 			return BT_FUNCTION;
 		} else if (t->type == TT_KEYWORD) {
 			if (tok_str_eq(t, "loop") || tok_str_eq(t, "if") || tok_str_eq(t, "else")) {
@@ -1234,7 +1246,16 @@ int tnsl_block_type(Vector *tokens, size_t cur) {
 			cur = next;
 		}
 	}
+
 	return -1;
+}
+
+Token *tnsl_find_last_token(Vector *tokens, size_t pos) {
+	if (pos >= tokens->count && tokens->count > 0)
+		return vect_get(tokens, tokens->count - 1);
+	else if (tokens->count > 0)
+		return vect_get(tokens, pos);
+	return NULL;
 }
 
 // Phase 1 - Module building
@@ -1246,6 +1267,7 @@ void p1_parse_params(Vector *var_list, Vector *tokens, size_t *pos) {
 
 	if (end < 0) {
 		printf("ERROR: Could not find closing when parsing parameter list \"%s\" (%d:%d)\n", t->data, t->line, t->col);
+		p1_error = true;
 		return;
 	}
 	
@@ -1313,6 +1335,7 @@ void p1_parse_type_list(Vector *var_list, Vector *tokens, size_t *pos) {
 
 	if (end < 0) {
 		printf("ERROR: Could not find closing when parsing parameter list \"%s\" (%d:%d)\n", t->data, t->line, t->col);
+		p1_error = true;
 		return;
 	}
 
@@ -1322,6 +1345,7 @@ void p1_parse_type_list(Vector *var_list, Vector *tokens, size_t *pos) {
 		if(to_add.location < 0) {
 			t = vect_get(tokens, *pos);
 			printf("ERROR: Could not parse type when in type list ~(%d:%d)\n", t->line, t->col);
+			p1_error = true;
 			break;
 		}
 
@@ -1355,6 +1379,7 @@ void p1_parse_struct(Module *add, Vector *tokens, size_t *pos) {
 	if(closing < 0 || tok_str_eq(t, "{") != true) {
 		printf("ERROR: Expected a member list (Types and member names enclosed with '{}') when defining struct.\n");
 		printf("       Place one after token \"%s\" line %d column %d\n\n", t->data, t->line, t->col);
+		p1_error = true;
 		typ_end(&to_add);
 		return;
 	}
@@ -1402,6 +1427,7 @@ void p1_parse_method(Module *root, Vector *tokens, size_t *pos) {
 
 	if (t == NULL || t->type != TT_DEFWORD) {
 		printf("ERROR: Expected user defined type while parsing method block. \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+		p1_error = true;
 		*pos = end;
 		return;
 	}
@@ -1428,8 +1454,45 @@ void p1_parse_method(Module *root, Vector *tokens, size_t *pos) {
 	*pos = end;
 }
 
-void p1_parse_module(Artifact *path, Module *root, Vector *tokens, size_t *pos) {
+void p1_file_loop(Artifact *path, Module *root, Vector *tokens, size_t start, size_t end);
 
+void p1_parse_module(Artifact *path, Module *root, Vector *tokens, size_t *pos) {
+	int end = tnsl_find_closing(tokens, *pos);
+	Token *t = vect_get(tokens, *pos);
+	
+	if (end < 0) {
+		t = tnsl_find_last_token(tokens, *pos);
+		printf("ERROR: Unable to find closing for module block \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+		return;
+	}
+	
+	*pos += 1;
+	t = vect_get(tokens, *pos);
+	bool export = false;
+	if (tok_str_eq(t, "export")) {
+		export = true;
+		*pos += 1;
+	}
+
+	*pos += 1;
+	t = vect_get(tokens, *pos);
+	if (t != NULL || t->type != TT_DEFWORD) {
+		t = tnsl_find_last_token(tokens, *pos);
+		if (t != NULL) {
+			printf("ERROR: Expected user defined module name after token \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+			p1_error = true;
+		}
+		*pos = end;
+		return;
+	}
+	char *name = t->data;
+
+	Module out = mod_init(name, root, export);
+
+	p1_file_loop(path, &out, tokens, *pos, end);
+
+	*pos = end;
+	vect_push(&(root->submods), &out);
 }
 
 
@@ -1448,18 +1511,67 @@ void p1_parse_file(Artifact *path, Module *root) {
 	Vector tokens = parse_file(fin);
 	fclose(fin);
 
+	p1_file_loop(path, root, &tokens, 0, tokens.count);
+
 	for (size_t i = 0; i < tokens.count; i++) {
 		Token *t = vect_get(&tokens, i);
-		if (tok_str_eq(t, "/;") || tok_str_eq(t, ";;")) {
-			switch(tnsl_block_type(&tokens, i)) {
+		free(t->data);
+	}
+	vect_end(&tokens);
+}
+
+void p1_file_loop(Artifact *path, Module *root, Vector *tokens, size_t start, size_t end) {
+	for(;start < end; start++) {
+		Token *t = vect_get(tokens, start);
+		if (t->type == TT_SPLITTR && tok_str_eq(t, ":")) {
+			t = vect_get(tokens, ++start);
+			
+			if (t == NULL || !tok_str_eq(t, "import")) {
+				t = tnsl_find_last_token(tokens, start);
+				printf("ERROR: Comptime declarations are not implemented other than 'import' \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+				p1_error = true;
+				continue;
+			}
+
+			t = vect_get(tokens, ++start);
+			if(t != NULL && t->type == TT_LITERAL) {
+				// Process new path to follow using old path.
+				char *cpy = art_to_str(path, '/');
+				Artifact new_path = art_from_str(cpy, '/');
+				free(cpy);
+
+				// Pop off file name
+				art_pop_str(&new_path);
+				
+				// Copy token data (something like "path/to/file.tnsl" including the quotes)
+				// This path is relative to the current file
+				Vector v = vect_from_string(t->data);
+				// Pop off last quote, replace with \0
+				vect_pop(&v);
+				vect_as_string(&v);
+				// Remove starting quote by indexing into data
+				Artifact addon = art_from_str((char *)v.data + 1, '/');
+				// No more need for copy string
+				vect_end(&v);
+				// Add relative path to current folder
+				art_add_art(&new_path, &addon);
+				// no more need for path relative to file
+				art_end(&addon);
+
+				p1_parse_file(&new_path, root);
+				// Cleanup last remaining artifact
+				art_end(&new_path);
+			}
+		} else if (t->type == TT_DELIMIT && (tok_str_eq(t, "/;") || tok_str_eq(t, ";;"))) {
+			switch(tnsl_block_type(tokens, start)) {
 			case BT_FUNCTION:
-				p1_parse_function(root, &tokens, &i);
+				p1_parse_function(root, tokens, &start);
 				break;
 			case BT_MODULE:
-				p1_parse_module(path, root, &tokens, &i);
+				p1_parse_module(path, root, tokens, &start);
 				break;
 			case BT_METHOD:
-				p1_parse_method(root, &tokens, &i);
+				p1_parse_method(root, tokens, &start);
 			case BT_INTERFACE:
 				printf("ERROR: Not implemented \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
 				break;
@@ -1470,27 +1582,21 @@ void p1_parse_file(Artifact *path, Module *root) {
 				break;
 			}
 			
-			t = vect_get(&tokens, i);
+			t = vect_get(tokens, start);
 
 			if (tok_str_eq(t, "/;")) {
-				int chk = tnsl_find_closing(&tokens, i);
+				int chk = tnsl_find_closing(tokens, start);
 				if (chk < 0)
 					printf("ERROR: Could not find closing for \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
 				else
-					i = chk;
+					start = chk;
 			} else if (tok_str_eq(t, ";;")) {
-				i--;
+				start--;
 			}
-		} else if (tok_str_eq(t, "struct")) {
-			p1_parse_struct(root, &tokens, &i);
+		} else if (t->type == TT_KEYWORD && tok_str_eq(t, "struct")) {
+			p1_parse_struct(root, tokens, &start);
 		}
 	}
-
-	for (size_t i = 0; i < tokens.count; i++) {
-		Token *t = vect_get(&tokens, i);
-		free(t->data);
-	}
-	vect_end(&tokens);
 }
 
 void p1_size_structs(Module *root) {
