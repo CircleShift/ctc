@@ -1678,6 +1678,7 @@ void p1_size_type (Module *root, Type *t) {
 		
 		if (n_end == NULL) {
 			printf("COMPILER ERROR: Did not properly assure type %s had all members with both name and RTN\n\n", t->name);
+			p1_error = true;
 			sum = -2;
 			break;
 		}
@@ -1691,15 +1692,17 @@ void p1_size_type (Module *root, Type *t) {
 		Type *mt = mod_find_type(root, &rta);
 		art_end(&rta);
 		
-		if(t == NULL) {
+		if(mt == NULL) {
 			// Could not find type
 			char *rtn = art_to_str(&rta, '.');
 			printf("ERROR: Could not find type %s when parsing type %s.\n\n", rtn, t->name);
+			p1_error = true;
 			free(rtn);
 			break;
 		} else if (mt->size == -1) {
 			// Cycle in type definition
 			printf("ERROR: Cyclical type definition %s -> %s\n\n", mt->name, t->name);
+			p1_error = true;
 			sum = -1;
 			break;
 		} else if (mt->size == 0 && mt->module != NULL) {
@@ -1715,6 +1718,56 @@ void p1_size_type (Module *root, Type *t) {
 }
 
 void p1_resolve_func_types(Module *root, Function *func) {
+	for (size_t i = 0; i < func->outputs.count; i++) {
+		Variable *var = vect_get(&func->outputs, i);
+		Artifact rtn = art_from_str(var->name, '.');
+		Type *t = mod_find_type(root, &rtn);
+
+		if(t == NULL) {
+			char *rt = art_to_str(&rtn, '.');
+			printf("ERROR: Could not find type %s for function %s\n\n", rt, func->name);
+			free(rt);
+			art_end(&rtn);
+			break;
+		}
+
+		art_end(&rtn);
+
+		Vector name = vect_from_string(t->name);
+		free(var->name);
+		var->name = vect_as_string(&name);
+		var->type = t;
+	}
+
+	for (size_t i = 0; i < func->inputs.count; i++) {
+		Variable *var = vect_get(&func->inputs, i);
+		char *n_end = strchr(var->name, ' ');
+
+		if (n_end == NULL) {
+			printf("COMPILER ERROR: Did not properly assure function %s had all parameters with both name and RTN\n\n", func->name);
+			p1_error = true;
+			break;
+		}
+
+		Artifact rtn = art_from_str(n_end + 1, '.');
+		Type *t = mod_find_type(root, &rtn);
+
+		if(t == NULL) {
+			char *rt = art_to_str(&rtn, '.');
+			printf("ERROR: Could not find type %s for function %s\n\n", rt, func->name);
+			free(rt);
+			art_end(&rtn);
+			break;
+		}
+
+		art_end(&rtn);
+
+		*n_end = 0;
+		Vector name = vect_from_string(var->name);
+		free(var->name);
+		var->name = vect_as_string(&name);
+		var->type = t;
+	}
 }
 
 void p1_resolve_types(Module *root) {
