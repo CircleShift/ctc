@@ -142,7 +142,7 @@ Vector vect_from_string(char *s) {
 
 	size_t i = 0;
 	while(s[i] != 0) {
-		vect_push(&out, s++);
+		vect_push(&out, s + i++);
 	}
 
 	return out;
@@ -415,7 +415,6 @@ Variable var_copy(Variable *to_copy) {
 	Variable out = var_init(to_copy->name, to_copy->type);
 
 	out.location = to_copy->location;
-	out.ptr_chain = vect_init(sizeof(int));
 
 	for (size_t i = 0; i < to_copy->ptr_chain.count; i++) {
 		int *ptr_orig = vect_get(&(to_copy->ptr_chain), i);
@@ -464,11 +463,13 @@ void func_end(Function *func) {
 		Variable *to_end = vect_get(&(func->inputs), i);
 		var_end(to_end);
 	}
+	vect_end(&(func->inputs));
 
 	for(size_t i = 0; i < func->outputs.count; i++) {
 		Variable *to_end = vect_get(&(func->outputs), i);
 		var_end(to_end);
 	}
+	vect_end(&(func->outputs));
 }
 
 
@@ -1418,12 +1419,16 @@ void p1_parse_function(Module *root, Vector *tokens, size_t *pos) {
 
 void p1_parse_method(Module *root, Vector *tokens, size_t *pos) {
 	int end = tnsl_find_closing(tokens, *pos);
-	
-	if (end < 0)
+	Token *t = vect_get(tokens, *pos);
+
+	if (end < 0) {
+		printf("ERROR: Could not find closing for block \"%s\" at (%d:%d)\n\n", t->data, t->line, t->col);
+		p1_error = true;
 		return;
+	}
 
 	*pos += 2;
-	Token *t = vect_get(tokens, *pos);
+	t = vect_get(tokens, *pos);
 
 	if (t == NULL || t->type != TT_DEFWORD) {
 		printf("ERROR: Expected user defined type while parsing method block. \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
@@ -1573,12 +1578,12 @@ void p1_file_loop(Artifact *path, Module *root, Vector *tokens, size_t start, si
 			case BT_METHOD:
 				p1_parse_method(root, tokens, &start);
 			case BT_INTERFACE:
-				printf("ERROR: Not implemented \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+				printf("ERROR: Block type not implemented \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
 				break;
 			case BT_CONTROL:
 			case BT_OPERATOR:
 			default:
-				printf("ERROR: Unexpected token \"%s\" at file root (%d:%d)\n\n", t->data, t->line, t->col);
+				printf("ERROR: Unknown block type \"%s\" at file root (%d:%d)\n\n", t->data, t->line, t->col);
 				break;
 			}
 			
