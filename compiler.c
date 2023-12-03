@@ -1596,13 +1596,16 @@ void p1_file_loop(Artifact *path, Module *root, Vector *tokens, size_t start, si
 				break;
 			case BT_METHOD:
 				p1_parse_method(root, tokens, &start);
-			case BT_INTERFACE:
-				printf("ERROR: Block type not implemented \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
 				break;
 			case BT_CONTROL:
+			case BT_INTERFACE:
 			case BT_OPERATOR:
+				printf("ERROR: Block type not implemented \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+				p1_error = true;
+				break;
 			default:
 				printf("ERROR: Unknown block type \"%s\" at file root (%d:%d)\n\n", t->data, t->line, t->col);
+				p1_error = true;
 				break;
 			}
 			
