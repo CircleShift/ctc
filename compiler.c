@@ -287,7 +287,7 @@ CompData cdat_init() {
 }
 
 void cdat_write_to_file(CompData *cdat, FILE *fout) {
-	fprintf(fout, "%s\n", vect_as_string(&(cdat->header)));
+	fprintf(fout, "format ELF64\n%s\n", vect_as_string(&(cdat->header)));
 	fprintf(fout, "%s\n", vect_as_string(&(cdat->data)));
 	fprintf(fout, "%s\n", vect_as_string(&(cdat->text)));
 	fflush(fout);
@@ -321,7 +321,7 @@ typedef struct {
 	char *name;
 	Type *type;
 	Vector ptr_chain;
-	int location; // negative for on stack, positive or zero for in register
+	int location; // negative for on stack, zero for in data section, positive for in register
 } Variable;
 
 #define PTYPE_PTR -1
@@ -532,11 +532,11 @@ void *mod_find_rec(Module *mod, Artifact *art, size_t sub, int find_type) {
 
 		for (size_t i = 0; i < search->count;i++) {
 			void *e = vect_get(search, i);
-			if (find_type == FT_VAR && strcmp(((Variable *)e)->name, *to_check)) {
+			if (find_type == FT_VAR && strcmp(((Variable *)e)->name, *to_check) == 0) {
 				return e;
-			} else if (find_type == FT_FUN && strcmp(((Function *)e)->name, *to_check)) {
+			} else if (find_type == FT_FUN && strcmp(((Function *)e)->name, *to_check) == 0) {
 				return e;
-			} else if (find_type == FT_TYP && strcmp(((Type *)e)->name, *to_check)) {
+			} else if (find_type == FT_TYP && strcmp(((Type *)e)->name, *to_check) == 0) {
 				return e;
 			}
 		}
@@ -568,6 +568,31 @@ Function *mod_find_func(Module *mod, Artifact *art) {
 
 Variable *mod_find_var(Module *mod, Artifact *art) {
 	return mod_find_rec(mod, art, 0, FT_VAR);
+}
+
+Module *mod_find_sub(Module *mod, char *chk) {
+	for(size_t i = 0; i < mod->submods.count; i++) {
+		Module *m = vect_get(&mod->submods, i);
+		if(strcmp(m->name, chk))
+				return m;
+	}
+	return NULL;
+}
+
+void mod_full_path_rec(Module *m, Vector *v) {
+	if(m->parent != NULL)
+		mod_full_path_rec(m->parent, v);
+	
+	char dot = '.';
+	if(v->count > 0 || (v->count == 0 && m->name[0] == '@'))
+		vect_push(v, &dot);
+	vect_push_string(v, m->name);
+}
+
+char *mod_full_path(Module *m) {
+	Vector out = vect_init(sizeof(char));
+	mod_full_path_rec(m, &out);
+	return vect_as_string(&out);
 }
 
 // Recursive end of all modules. To be called at the end
@@ -1060,7 +1085,11 @@ Variable tnsl_parse_type(Vector *tokens, size_t cur) {
 	// Pre loop
 	for (; cur < tokens->count; cur++) {
 		Token *t = vect_get(tokens, cur);
-		if (t->type == TT_KEYTYPE || t->type == TT_DEFWORD) {
+		if (t == NULL) {
+			vect_end(&ftn);
+			vect_end(&ptr);
+			return err;
+		} else if (t->type == TT_KEYTYPE || t->type == TT_DEFWORD) {
 			break;
 		} else if (t->type == TT_AUGMENT) {
 			if (tok_str_eq(t, "~")) {
@@ -1103,14 +1132,18 @@ Variable tnsl_parse_type(Vector *tokens, size_t cur) {
 
 	// ftn loop
 	Token *t = vect_get(tokens, cur);
-	if (t->type == TT_KEYTYPE) {
+	if(t == NULL) {
+		vect_end(&ftn);
+		vect_end(&ptr);
+		return err;
+	} else if (t->type == TT_KEYTYPE) {
 		vect_push_string(&ftn, t->data);
 		cur++;
 	} else if (t->type == TT_DEFWORD) {
 		for(; cur < tokens->count; cur++) {
 			t = vect_get(tokens, cur);
 
-			if (t->type == TT_DEFWORD) {
+			if (t != NULL && t->type == TT_DEFWORD) {
 				vect_push_string(&ftn, t->data);	
 			} else {
 				vect_end(&ftn);
@@ -1297,7 +1330,7 @@ void p1_parse_params(Vector *var_list, Vector *tokens, size_t *pos) {
 				vect_end(&(current_type.ptr_chain));
 			}
 			current_type = tnsl_parse_type(tokens, *pos);
-			*pos = current_type.location;
+			*pos = tnsl_next_non_nl(tokens, current_type.location - 1);
 		}
 
 		t = vect_get(tokens, *pos);
@@ -1359,7 +1392,7 @@ void p1_parse_type_list(Vector *var_list, Vector *tokens, size_t *pos) {
 		return;
 	}
 
-	for(*pos += 1; pos < end;) {
+	for(*pos += 1; *pos < (size_t) end;) {
 		Variable to_add = tnsl_parse_type(tokens, *pos);
 
 		if(to_add.location < 0) {
@@ -1390,7 +1423,7 @@ void p1_parse_struct(Module *add, Vector *tokens, size_t *pos) {
 		return;
 	}
 
-	Type to_add = typ_init(t->data, NULL);
+	Type to_add = typ_init(t->data, add);
 
 	*pos += 2;
 	int closing = tnsl_find_closing(tokens, *pos);
@@ -1500,10 +1533,10 @@ void p1_parse_module(Artifact *path, Module *root, Vector *tokens, size_t *pos) 
 
 	*pos += 1;
 	t = vect_get(tokens, *pos);
-	if (t != NULL || t->type != TT_DEFWORD) {
-		t = tnsl_find_last_token(tokens, *pos);
+	if (t == NULL || t->type != TT_DEFWORD) {
+		t = tnsl_find_last_token(tokens, *pos - 1);
 		if (t != NULL) {
-			printf("ERROR: Expected user defined module name after token \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+			printf("ERROR: Expected user defined module name after token \"%s\" (%d:%d) %d\n\n", t->data, t->line, t->col, t->type);
 			p1_error = true;
 		}
 		*pos = end;
@@ -1587,6 +1620,7 @@ void p1_file_loop(Artifact *path, Module *root, Vector *tokens, size_t start, si
 				art_end(&new_path);
 			}
 		} else if (t->type == TT_DELIMIT && (tok_str_eq(t, "/;") || tok_str_eq(t, ";;"))) {
+			size_t block_start = start;
 			switch(tnsl_block_type(tokens, start)) {
 			case BT_FUNCTION:
 				p1_parse_function(root, tokens, &start);
@@ -1611,7 +1645,7 @@ void p1_file_loop(Artifact *path, Module *root, Vector *tokens, size_t start, si
 			
 			t = vect_get(tokens, start);
 
-			if (tok_str_eq(t, "/;")) {
+			if (start == block_start) {
 				int chk = tnsl_find_closing(tokens, start);
 				if (chk < 0)
 					printf("ERROR: Could not find closing for \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
@@ -1626,13 +1660,80 @@ void p1_file_loop(Artifact *path, Module *root, Vector *tokens, size_t start, si
 	}
 }
 
-void p1_size_structs(Module *root) {
+void p1_size_type (Module *root, Type *t) {
+	if (t->size == -1)
+		return;
+	
+	int sum = 0;
+	t->size = -1;
 
+	Vector tmp = vect_from_string("@");
+	vect_push_string(&tmp, t->name);
+	t->module = mod_find_sub(root, vect_as_string(&tmp));
+	vect_end(&tmp);
+
+	for(size_t i = 0; i < t->members.count; i++) {
+		Variable *var = vect_get(&t->members, i);
+		char *n_end = strchr(var->name, ' ');
+		
+		if (n_end == NULL) {
+			printf("COMPILER ERROR: Did not properly assure type %s had all members with both name and RTN\n\n", t->name);
+			sum = -2;
+			break;
+		}
+
+		*n_end = 0;
+		Vector name = vect_from_string(var->name);
+		Artifact rta = art_from_str(n_end + 1, '.');
+		free(var->name);
+		var->name = vect_as_string(&name);
+
+		Type *mt = mod_find_type(root, &rta);
+		art_end(&rta);
+		
+		if(t == NULL) {
+			// Could not find type
+			char *rtn = art_to_str(&rta, '.');
+			printf("ERROR: Could not find type %s when parsing type %s.\n\n", rtn, t->name);
+			free(rtn);
+			break;
+		} else if (mt->size == -1) {
+			// Cycle in type definition
+			printf("ERROR: Cyclical type definition %s -> %s\n\n", mt->name, t->name);
+			sum = -1;
+			break;
+		} else if (mt->size == 0 && mt->module != NULL) {
+			// Need to size this type as well
+			p1_size_type(mt->module, mt);
+		}
+		
+		sum += mt->size;
+		var->type = mt;
+	}
+	
+	t->size = sum;
+}
+
+void p1_resolve_func_types(Module *root, Function *func) {
+}
+
+void p1_resolve_types(Module *root) {
+	for(size_t i = 0; i < root->types.count; i++) {
+		p1_size_type(root, vect_get(&root->types, i));
+	}
+
+	for(size_t i = 0; i < root->submods.count; i++) {
+		p1_resolve_types(vect_get(&root->submods, i));
+	}
+
+	for(size_t i = 0; i < root->funcs.count; i++) {
+		p1_resolve_func_types(root, vect_get(&root->funcs, i));
+	}
 }
 
 void phase_1(Artifact *path, Module *root) {
 	p1_parse_file(path, root);
-	p1_size_structs(root);
+	p1_resolve_types(root);
 }
 
 // Phase 2
