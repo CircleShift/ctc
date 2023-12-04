@@ -1537,8 +1537,8 @@ void p1_parse_module(Artifact *path, Module *root, Vector *tokens, size_t *pos) 
 		t = tnsl_find_last_token(tokens, *pos - 1);
 		if (t != NULL) {
 			printf("ERROR: Expected user defined module name after token \"%s\" (%d:%d) %d\n\n", t->data, t->line, t->col, t->type);
-			p1_error = true;
 		}
+		p1_error = true;
 		*pos = end;
 		return;
 	}
@@ -1792,16 +1792,93 @@ void phase_1(Artifact *path, Module *root) {
 // Phase 2
 
 bool p2_error = false;
+
+void p2_file_loop(
+		Artifact *path, Module *root, CompData *out,
+		Vector *tokens, size_t start, size_t end);
+
+void p2_compile_module(Artifact *path, Module *root, CompData *out, Vector *tokens, size_t *pos) {
+	int end = tnsl_find_closing(tokens, *pos);
+	Token *t = tnsl_find_last_token(tokens, *pos);
+
+	if (end < 0) {
+		printf("ERROR: Could not find closing delimiter for module (%d:%d)\n\n", t->line, t->col);
+		p2_error = true;
+		return;
+	}
+
+	*pos += 1;
+	t = vect_get(tokens, *pos);
+
+	if(tok_str_eq(t, "export")){
+		*pos += 1;
+	}
+
+	*pos += 1;
+	t = vect_get(tokens, *pos);
+
+	if (t == NULL || t->type != TT_DEFWORD) {
+		t = tnsl_find_last_token(tokens, *pos);
+		printf("ERROR: Expected module name after \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+		p2_error = true;
+		*pos = end;
+		return;
+	}
+
+	Module *mod_root = mod_find_sub(root, t->data);
+
+	if(mod_root == NULL) {
+		printf("COMPILER ERROR: Could not find sub module for \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+		p2_error = true;
+		*pos = end;
+		return;
+	}
+
+	p2_file_loop(path, mod_root, out, tokens, *pos, end);
+
+	*pos = end;
+}
+
 CompData p2_compile_file(Artifact *path, Module *root) {
 	CompData out = cdat_init();
+
+	char *full_path = art_to_str(path, '/');
+	FILE *fin = fopen(full_path, "r");
+
+	if (fin == NULL) {
+		printf("Unable to open file %s for reading.\n\n", full_path);
+		p2_error = true;
+		free(full_path);
+		return out;
+	}
+
+	free(full_path);
+	
+	Vector tokens = parse_file(fin);
+	fclose(fin);
+
+	p2_file_loop(path, root, &out, &tokens, 0, tokens.count);
+
+	for (size_t i = 0; i < tokens.count; i++) {
+		Token *t = vect_get(&tokens, i);
+		free(t->data);
+	}
+
+	vect_end(&tokens);
+
 	return out;
+}
+
+void p2_file_loop(
+		Artifact *path, Module *root, CompData *out,
+		Vector *tokens, size_t start, size_t end) {
 }
 
 CompData phase_2(Artifact *path, Module *root) {
 	return p2_compile_file(path, root);
 }
 
-void compile (Artifact *path_in, Artifact *path_out) {
+void compile(Artifact *path_in, Artifact *path_out) {
 
 	// Root module used for artifact resolution
 	Module root = mod_init("", NULL, true);
