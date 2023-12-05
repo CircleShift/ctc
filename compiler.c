@@ -286,6 +286,12 @@ CompData cdat_init() {
 	return out;
 }
 
+void cdat_add(CompData *a, CompData *b) {
+	vect_push_string(&a->header, vect_as_string(&b->header));
+	vect_push_string(&a->data, vect_as_string(&b->data));
+	vect_push_string(&a->text, vect_as_string(&b->text));
+}
+
 void cdat_write_to_file(CompData *cdat, FILE *fout) {
 	fprintf(fout, "format ELF64\n%s\n", vect_as_string(&(cdat->header)));
 	fprintf(fout, "%s\n", vect_as_string(&(cdat->data)));
@@ -1988,6 +1994,121 @@ void phase_1(Artifact *path, Module *root) {
 
 bool p2_error = false;
 
+/* Op order
+ * first is parens (not handled here)
+ * 
+ * 0: .
+ * get member or method
+ * 
+ * 1: `
+ * dereference
+ *
+ * 2: ++ --
+ * Increment/decrement
+ *
+ * 3: len
+ * length of array or type
+ *
+ * 4: * / %
+ * Multiplication/division
+ * 
+ * 5: + -
+ * Addition/subtraction
+ *
+ * 6: ! & | ^ << >> !& !| !^
+ * Bitwise operations (and boolean not)
+ *
+ * 7: == && || ^^ < > !== !&& !|| !^^ !< !> <== >==
+ * Boolean operations
+ *
+ * 8: ~
+ * Get reference
+ *
+ * 9: = *= /= %= += -= etc.
+ * Assignment operators
+ */
+
+// returns the integer prescident of the operator (lower means first)
+int op_order(Token *t) {
+	if (t == NULL || t->type != TT_AUGMENT) {
+		printf("COMPILER ERROR: op_order called on null or non-augment token ");
+		if (t == NULL)
+			printf("NULL\n\n");
+		else
+		 	printf(" \"%s\" (%d:%d)", t->data, t->line, t->col);
+		return -1;
+	}
+
+	int l = strlen(t->data);
+	
+	if(l == 1) {
+		switch(t->data[0]) {
+		case '.':
+			return 0;
+		case '`':
+			return 1;
+		case '*':
+		case '/':
+		case '%':
+			return 4;
+		case '+':
+		case '-':
+			return 5;
+		case '!':
+		case '&':
+		case '|':
+		case '^':
+			return 6;
+		case '<':
+		case '>':
+			return 7;
+		case '~':
+			return 8;
+		case '=':
+			return 9;
+		}
+	} else if (l == 2) {
+
+		if(t->data[0] == t->data[1]) {
+			if (t->data[1] == '+' || t->data[1] == '-')
+				return 2;
+			if (t->data[0] == '<' || t->data[0] == '>')
+				return 6;
+			return 7;
+		}
+
+		if (t->data[1] == '<' || t->data[1] == '>')
+			return 7;
+
+		if (t->data[1] == '=')
+			return 8;
+
+		if (t->data[0] == '!')
+			return 6;
+	} else if (l == 3) {
+		if(tok_str_eq(t, "len"))
+			return 3;
+		return 6;
+	}
+	
+	return -1;
+}
+
+Variable eval(Module *root, CompData *out, Vector *tokens, size_t *pos) {
+	Variable store;
+	return store;
+}
+
+void p2_compile_enum(Module *root, CompData *out, Vector *tokens, size_t *pos) {
+	
+}
+
+void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *pos) {
+}
+
+void p2_compile_method(Module *root, CompData *out, Vector *tokens, size_t *pos) {
+}
+
 void p2_file_loop(
 		Artifact *path, Module *root, CompData *out,
 		Vector *tokens, size_t start, size_t end);
@@ -2067,6 +2188,97 @@ CompData p2_compile_file(Artifact *path, Module *root) {
 void p2_file_loop(
 		Artifact *path, Module *root, CompData *out,
 		Vector *tokens, size_t start, size_t end) {
+	
+	for(;start < end; start++) {
+		Token *t = vect_get(tokens, start);
+		if (t->type == TT_SPLITTR && tok_str_eq(t, ":")) {
+			t = vect_get(tokens, ++start);
+			
+			if (t == NULL || !tok_str_eq(t, "import")) {
+				t = tnsl_find_last_token(tokens, start);
+				printf("ERROR: Comptime declarations are not implemented other than 'import' \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+				p2_error = true;
+				continue;
+			}
+
+			t = vect_get(tokens, ++start);
+			if(t != NULL && t->type == TT_LITERAL) {
+				// Process new path to follow using old path.
+				char *cpy = art_to_str(path, '/');
+				Artifact new_path = art_from_str(cpy, '/');
+				free(cpy);
+
+				// Pop off file name
+				art_pop_str(&new_path);
+				
+				// Copy token data (something like "path/to/file.tnsl" including the quotes)
+				// This path is relative to the current file
+				Vector v = vect_from_string(t->data);
+				// Pop off last quote, replace with \0
+				vect_pop(&v);
+				vect_as_string(&v);
+				// Remove starting quote by indexing into data
+				Artifact addon = art_from_str((char *)v.data + 1, '/');
+				// No more need for copy string
+				vect_end(&v);
+				// Add relative path to current folder
+				art_add_art(&new_path, &addon);
+				// no more need for path relative to file
+				art_end(&addon);
+
+				CompData dat = p2_compile_file(&new_path, root);
+				cdat_add(out, &dat);
+				cdat_end(&dat);
+				// Cleanup last remaining artifact
+				art_end(&new_path);
+			}
+		} else if (t->type == TT_DELIMIT && (tok_str_eq(t, "/;") || tok_str_eq(t, ";;"))) {
+			size_t block_start = start;
+			switch(tnsl_block_type(tokens, start)) {
+			case BT_FUNCTION:
+				p2_compile_function(root, out, tokens, &start);
+				break;
+			case BT_MODULE:
+				p2_compile_module(path, root, out, tokens, &start);
+				break;
+			case BT_METHOD:
+				p2_compile_method(root, out, tokens, &start);
+				break;
+			case BT_ENUM:
+				p2_compile_enum(root, out, tokens, &start);
+				break;
+			case BT_CONTROL:
+				printf("ERROR: Control blocks (if, loop, switch) can only be placed within a function block. (%d:%d)\n\n", t->line, t->col);
+				p2_error = true;
+				break;
+			case BT_INTERFACE:
+			case BT_OPERATOR:
+				printf("ERROR: Block type not implemented \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+				p2_error = true;
+				break;
+			default:
+				printf("ERROR: Unknown block type \"%s\" at file root (%d:%d)\n\n", t->data, t->line, t->col);
+				p2_error = true;
+				break;
+			}
+			
+			t = vect_get(tokens, start);
+
+			if (start == block_start) {
+				int chk = tnsl_find_closing(tokens, start);
+				if (chk < 0)
+					printf("ERROR: Could not find closing for \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+				else
+					start = chk;
+			} else if (tok_str_eq(t, ";;")) {
+				start--;
+			}
+		} else if (t->type == TT_KEYWORD && tok_str_eq(t, "struct")) {
+			p1_parse_struct(root, tokens, &start);
+		} else if (tnsl_is_def(tokens, start)) {
+			p1_parse_def(root, tokens, &start);
+		}
+	}
 }
 
 CompData phase_2(Artifact *path, Module *root) {
@@ -2114,11 +2326,11 @@ void compile(Artifact *path_in, Artifact *path_out) {
 }
 
 char *tok_type_strs[] = {
-	"DEFWORD 0",
-	"KEYWORD 1",
-	"KEYTYPE 2",
-	"LITERAL 3",
-	"AUGMENT 4",
+	"DEFWORD",
+	"KEYWORD",
+	"KEYTYPE",
+	"LITERAL",
+	"AUGMENT",
 	"DELIMIT",
 	"SPLITTR"
 };
@@ -2171,10 +2383,12 @@ void help() {
 	printf("\n");
 	printf("Usage:\n");
 	printf("\tctc - The TNSL compiler (written in c)\n\n");
-	printf("\tctc [file in]              - compile the given file, writing output assembly in out.asm\n");
-	printf("\tctc [file in] [file out]   - same as before, but write the output assembly to the given filename\n");
-	printf("\t    -h                     - print this output message\n");
-	printf("\t    -v                     - print version information\n");
+	printf("\tctc [file in]                  - compile the given file, writing output assembly in out.asm\n");
+	printf("\tctc [file in] [file out]       - same as before, but write the output assembly to the given filename\n");
+	printf("\t    -h                         - print this output message\n");
+	printf("\t    -v                         - print version information\n");
+	printf("\t    -t [file in]               - output tokenization of file instead of assembly in out.asm\n");
+	printf("\t    -t [file in] [file out]    - output tokenization of file instead of assembly in output file\n");
 	printf("\n");
 }
 
