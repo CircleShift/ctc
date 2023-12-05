@@ -386,7 +386,7 @@ Type TYP_INBUILT[] = {
 };
 
 Type *typ_get_inbuilt(char *name) {
-	for (int i = 0; i < sizeof(TYP_INBUILT)/sizeof(Type); i++) {
+	for (size_t i = 0; i < sizeof(TYP_INBUILT)/sizeof(Type); i++) {
 		if (strcmp(TYP_INBUILT[i].name, name) == 0) {
 			return &(TYP_INBUILT[i]);
 		}
@@ -1331,11 +1331,11 @@ void p1_parse_params(Vector *var_list, Vector *tokens, size_t *pos) {
 	current_type.name = NULL;
 	current_type.type = NULL;
 
-	for(*pos = tnsl_next_non_nl(tokens, *pos); *pos < end; *pos = tnsl_next_non_nl(tokens, *pos)) {
+	for(*pos = tnsl_next_non_nl(tokens, *pos); *pos < (size_t) end; *pos = tnsl_next_non_nl(tokens, *pos)) {
 		size_t next = tnsl_next_non_nl(tokens, *pos);
 		t = vect_get(tokens, tnsl_next_non_nl(tokens, *pos));
 
-		if(!tok_str_eq(t, ",") && next < end) {
+		if(!tok_str_eq(t, ",") && next < (size_t) end) {
 			if(current_type.name != NULL) {
 				free(current_type.name);
 				vect_end(&(current_type.ptr_chain));
@@ -1375,7 +1375,7 @@ void p1_parse_params(Vector *var_list, Vector *tokens, size_t *pos) {
 		*pos = tnsl_next_non_nl(tokens, *pos);
 		t = vect_get(tokens, *pos);
 
-		if (*pos >= end) {
+		if (*pos >= (size_t)end) {
 			break;
 		} else if (tok_str_eq(t, ",") != true) {
 			printf("ERROR: Unexpected token in member list (was looking for a comma to separate members)\n");
@@ -1459,6 +1459,7 @@ void p1_parse_def(Module *root, Vector *tokens, size_t *pos) {
 	Token *t = vect_get(tokens, *pos);
 	if (t == NULL || t->type != TT_DEFWORD) {
 		printf("ERROR: p1_parse_def was called but did not find a defword after the type. (%d:%d)\n\n", t->line, t->col);
+		*pos -= 1;
 		return;
 	}
 
@@ -1476,6 +1477,8 @@ void p1_parse_def(Module *root, Vector *tokens, size_t *pos) {
 		vect_push_string(&name, " ");
 		vect_push_string(&name, type.name);
 		to_add.name = vect_as_string(&name);
+
+		vect_push(&root->vars, &to_add);
 
 		*pos += 1;
 		t = vect_get(tokens, *pos);
@@ -1498,6 +1501,8 @@ void p1_parse_def(Module *root, Vector *tokens, size_t *pos) {
 			break;
 		}
 	}
+
+	*pos -= 1;
 
 	var_end(&type);
 }
@@ -1542,7 +1547,7 @@ void p1_parse_enum(Module *root, Vector *tokens, size_t *pos) {
 	Variable e_type = tnsl_parse_type(tokens, *pos);
 	*pos = tnsl_next_non_nl(tokens, e_type.location); // Past the closing bracket
 	
-	for (;*pos < end; *pos = tnsl_next_non_nl(tokens, *pos)) {
+	for (;*pos < (size_t)end; *pos = tnsl_next_non_nl(tokens, *pos)) {
 		t = vect_get(tokens, *pos);
 		if (t == NULL || t->type != TT_DEFWORD) {
 			printf("ERROR: Unexpected token in enum block (expected user defined name) (%d:%d)\n\n", t->line, t->col);
@@ -1576,7 +1581,7 @@ void p1_parse_enum(Module *root, Vector *tokens, size_t *pos) {
 					*pos = tnsl_find_closing(tokens, *pos);
 				}
 			}
-		} else if (tok_str_eq(t, ",") || *pos >= end) {
+		} else if (tok_str_eq(t, ",") || *pos >= (size_t)end) {
 			continue;
 		} else {
 			printf("ERROR: Expected an assignment (= <value>) or a comma after user defined word in enum block \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
@@ -1599,7 +1604,7 @@ void p1_parse_function(Module *root, Vector *tokens, size_t *pos) {
 	
 	Function out = func_init("", root);
 
-	for (*pos += 1; *pos < end; *pos += 1) {
+	for (*pos += 1; *pos < (size_t)end; *pos += 1) {
 		Token *t = vect_get(tokens, *pos);
 		if(t->type == TT_DEFWORD) {
 			free(out.name);
@@ -1808,6 +1813,8 @@ void p1_file_loop(Artifact *path, Module *root, Vector *tokens, size_t start, si
 			}
 		} else if (t->type == TT_KEYWORD && tok_str_eq(t, "struct")) {
 			p1_parse_struct(root, tokens, &start);
+		} else if (tnsl_is_def(tokens, start)) {
+			p1_parse_def(root, tokens, &start);
 		}
 	}
 }
