@@ -500,14 +500,21 @@ void *mod_find_rec(Module *mod, Artifact *art, size_t sub, int find_type) {
 	// Not at end of art, need to go deeper
 	if (sub + 1 < art->count) {
 		char **to_check = vect_get(art, sub);
+
+		Vector e_check = vect_from_string("@@"); // In case it is a variable inside an enum
+		vect_push_string(&e_check, *to_check);
+		vect_as_string(&e_check);
+		
 		void *out = NULL;
 		for (size_t i = 0; i < mod->submods.count; i++) {
 			Module *m = vect_get(&(mod->submods), i);
-			if (strcmp(m->name, *to_check)) {
+			if (strcmp(m->name, *to_check) == 0 || strcmp(m->name, e_check.data) == 0) {
 				out = mod_find_rec(m, art, sub + 1, find_type);
 				break;
 			}
 		}
+
+		vect_end(&e_check);
 
 		if (out != NULL)
 			return out;
@@ -654,7 +661,7 @@ bool tok_eq(Token *a, Token *b) {
 #define TT_DELIMIT 5
 #define TT_SPLITTR 6
 
-char *KEYWORDS = "module,export,asm,if,else,loop,label,goto,continue,break,return,import,as,using,struct,method,interface,implements,operator,len,is";
+char *KEYWORDS = "module,export,asm,if,else,loop,label,goto,continue,break,return,import,as,using,struct,method,interface,enum,implements,operator,len,is";
 char *KEYTYPES = "uint8,uint16,uint32,uint64,uint,int8,int16,int32,int64,int,float32,float64,float,comp64,comp,bool,vect,void,type";
 
 char *RESERVED = "~`!@#$%^&*()[]{}+-=\"\'\\|:;/?>.<,";
@@ -924,6 +931,7 @@ Vector parse_file(FILE *fin) {
 
 		if (isspace(check) && check != '\n') {
 			check = fgetc(fin);
+			col++;
 		} else if (check == '#') {
 			parse_comment(&check, fin);
 		} else if (check == '\"' || check == '\'') {
@@ -958,7 +966,8 @@ Vector parse_file(FILE *fin) {
 #define BT_INTERFACE 3
 #define BT_MODULE 4
 #define BT_CONTROL 5
-#define BT_LAMBDA 6
+#define BT_ENUM 6
+#define BT_LAMBDA 7
 
 unsigned long tnsl_parse_binary(char *data) {
 	unsigned long out = 0;
@@ -1281,6 +1290,8 @@ int tnsl_block_type(Vector *tokens, size_t cur) {
 				return BT_MODULE;
 			} else if (tok_str_eq(t, "method")) {
 				return BT_METHOD;
+			} else if (tok_str_eq(t, "enum")) {
+				return BT_ENUM;
 			} else if (tok_str_eq(t, "operator")) {
 				printf("WARNING: Operator block not implemented (Found at %d:%d)\n\n", t->line, t->col);
 				return BT_OPERATOR;
@@ -1441,6 +1452,144 @@ void p1_parse_struct(Module *add, Vector *tokens, size_t *pos) {
 	vect_push(&(add->types), &to_add);
 }
 
+void p1_parse_def(Module *root, Vector *tokens, size_t *pos) {
+	Variable type = tnsl_parse_type(tokens, *pos);
+	*pos = type.location;
+
+	Token *t = vect_get(tokens, *pos);
+	if (t == NULL || t->type != TT_DEFWORD) {
+		printf("ERROR: p1_parse_def was called but did not find a defword after the type. (%d:%d)\n\n", t->line, t->col);
+		return;
+	}
+
+	for(;*pos < tokens->count; *pos += 1) {
+		t = vect_get(tokens, *pos);
+		if (t == NULL || t->type != TT_DEFWORD) {
+			break;
+		}
+
+		Variable to_add = var_copy(&type);
+		free(to_add.name);
+		to_add.location = *pos;
+
+		Vector name = vect_from_string(t->data);
+		vect_push_string(&name, " ");
+		vect_push_string(&name, type.name);
+		to_add.name = vect_as_string(&name);
+
+		*pos += 1;
+		t = vect_get(tokens, *pos);
+		
+		if (tok_str_eq(t, "=")) {
+			for(*pos += 1; *pos < tokens->count; *pos += 1) {
+				t = vect_get(tokens, *pos);
+				if (tok_str_eq(t, ",")) {
+					break;
+				} else if(t->type == TT_SPLITTR) {
+					*pos -= 1;
+					break;
+				} else if (t->type == TT_DELIMIT) {
+					*pos = tnsl_find_closing(tokens, *pos);
+				}
+			}
+		} else if (tok_str_eq(t, ",")) {
+			continue;
+		} else {
+			break;
+		}
+	}
+
+	var_end(&type);
+}
+
+void p1_parse_enum(Module *root, Vector *tokens, size_t *pos) {
+	int end = tnsl_find_closing(tokens, *pos);
+	Token *t = vect_get(tokens, *pos);
+
+	if (end < 0) {
+		printf("ERROR: Could not find closing for enum \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+		p1_error = true;
+		return;
+	}
+
+	*pos += 2;
+	t = vect_get(tokens, *pos);
+
+	if (t == NULL || t->type != TT_DEFWORD) {
+		t = tnsl_find_last_token(tokens, *pos);
+		printf("ERROR: Expected user defined name for enum \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+		*pos = end;
+		return;
+	}
+
+	Vector name = vect_from_string("@@");
+	vect_push_string(&name, t->data);
+	Module out = mod_init(vect_as_string(&name), root, root->exported);
+	vect_end(&name);
+	
+	*pos += 1;
+	t = vect_get(tokens, *pos);
+
+	if (t == NULL || !tok_str_eq(t, "[")) {
+		printf("ERROR: Expected a type after enum name (enclose the type in []) (%d:%d)\n\n", t->line, t->col);
+		p1_error = true;
+		vect_push(&root->submods, &out);
+		*pos = end;
+		return;
+	}
+
+	*pos += 1;
+	Variable e_type = tnsl_parse_type(tokens, *pos);
+	*pos = tnsl_next_non_nl(tokens, e_type.location); // Past the closing bracket
+	
+	for (;*pos < end; *pos = tnsl_next_non_nl(tokens, *pos)) {
+		t = vect_get(tokens, *pos);
+		if (t == NULL || t->type != TT_DEFWORD) {
+			printf("ERROR: Unexpected token in enum block (expected user defined name) (%d:%d)\n\n", t->line, t->col);
+			p1_error = true;
+			break;
+		}
+
+		Variable to_add = var_copy(&e_type);
+		free(to_add.name);
+		to_add.location = *pos;
+
+		Vector name = vect_from_string(t->data);
+		vect_push_string(&name, " ");
+		vect_push_string(&name, e_type.name);
+		to_add.name = vect_as_string(&name);
+
+		vect_push(&out.vars, &to_add);
+
+		*pos = tnsl_next_non_nl(tokens, *pos);
+		t = vect_get(tokens, *pos);
+		
+		if (tok_str_eq(t, "=")) {
+			for(*pos = tnsl_next_non_nl(tokens, *pos); *pos < tokens->count; *pos = tnsl_next_non_nl(tokens, *pos)) {
+				t = vect_get(tokens, *pos);
+				if (tok_str_eq(t, ",")) {
+					break;
+				} else if(t->type == TT_SPLITTR) {
+					*pos -= 1;
+					break;
+				} else if (t->type == TT_DELIMIT) {
+					*pos = tnsl_find_closing(tokens, *pos);
+				}
+			}
+		} else if (tok_str_eq(t, ",") || *pos >= end) {
+			continue;
+		} else {
+			printf("ERROR: Expected an assignment (= <value>) or a comma after user defined word in enum block \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+			p1_error = true;
+			break;
+		}
+
+	}
+
+	vect_push(&root->submods, &out);
+	var_end(&e_type);
+	*pos = end;
+}
 
 void p1_parse_function(Module *root, Vector *tokens, size_t *pos) {
 	int end = tnsl_find_closing(tokens, *pos);
@@ -1631,6 +1780,9 @@ void p1_file_loop(Artifact *path, Module *root, Vector *tokens, size_t start, si
 			case BT_METHOD:
 				p1_parse_method(root, tokens, &start);
 				break;
+			case BT_ENUM:
+				p1_parse_enum(root, tokens, &start);
+				break;
 			case BT_CONTROL:
 			case BT_INTERFACE:
 			case BT_OPERATOR:
@@ -1699,6 +1851,11 @@ void p1_size_type (Module *root, Type *t) {
 			p1_error = true;
 			free(rtn);
 			break;
+		} else if (var->ptr_chain.count > 0) {
+			// Pointer to type, don't need to size
+			sum += 8;
+			var->type = mt;
+			continue;
 		} else if (mt->size == -1) {
 			// Cycle in type definition
 			printf("ERROR: Cyclical type definition %s -> %s\n\n", mt->name, t->name);
@@ -1781,6 +1938,37 @@ void p1_resolve_types(Module *root) {
 
 	for(size_t i = 0; i < root->funcs.count; i++) {
 		p1_resolve_func_types(root, vect_get(&root->funcs, i));
+	}
+
+	for (size_t i = 0; i < root->vars.count; i++) {
+		Variable *v = vect_get(&root->vars, i);
+		char *n_end = strchr(v->name, ' ');
+
+		if (n_end == NULL) {
+			printf("COMPILER ERROR: Not properly formatted variable name \"%s\"\n\n", v->name);
+			p1_error = true;
+			continue;
+		}
+
+		Artifact rtn = art_from_str(n_end + 1, '.');
+		*n_end = 0;
+		Vector name = vect_from_string(v->name);
+		free(v->name);
+		v->name = vect_as_string(&name);
+
+		Type *t = mod_find_type(root, &rtn);
+		
+		if (t == NULL) {
+			char *rts = art_to_str(&rtn, '.');
+			printf("ERROR: Could not find type \"%s\" for variable \"%s\"\n\n", rts, v->name);
+			free(rts);
+			art_end(&rtn);
+			p1_error = true;
+			continue;
+		}
+
+		art_end(&rtn);
+		v->type = t;
 	}
 }
 
