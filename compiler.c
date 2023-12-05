@@ -840,7 +840,7 @@ void parse_reserved_tokens(int *next, Vector *out, int *line, int *col, FILE *fi
 	while (*next != EOF) {
 		add = *next;
 		
-		if (!is_reserved(add)) {
+		if (!is_reserved(add) || add == '"' || add == '\'') {
 			break;
 		}
 
@@ -2113,6 +2113,58 @@ void compile(Artifact *path_in, Artifact *path_out) {
 	cdat_end(&out);
 }
 
+char *tok_type_strs[] = {
+	"DEFWORD 0",
+	"KEYWORD 1",
+	"KEYTYPE 2",
+	"LITERAL 3",
+	"AUGMENT 4",
+	"DELIMIT",
+	"SPLITTR"
+};
+
+void write_token(FILE *out, Token *t) {
+	fprintf(out, "{line: %d, column: %d, type %s, data: \"%s\"}\n", t->line, t->col, tok_type_strs[t->type], t->data);
+}
+
+void tokenize(Artifact *path_in, Artifact *path_out) {
+	char *full_path = art_to_str(path_in, '/');
+	FILE *fin = fopen(full_path, "r");
+
+	if (fin == NULL) {
+		printf("Unable to open file %s for reading.\n\n", full_path);
+		free(full_path);
+		return;
+	}
+
+	free(full_path);
+	full_path = art_to_str(path_out, '/');
+	FILE *fout = fopen(full_path, "w");
+	
+	if (fout == NULL) {
+		printf("Unable to open file %s for writing.\n\n", full_path);
+		free(full_path);
+		fclose(fin);
+		return;
+	}
+
+	free(full_path);
+	
+	Vector tokens = parse_file(fin);
+	fclose(fin);
+
+	for(size_t i = 0; i < tokens.count; i++) {
+		Token *t = vect_get(&tokens, i);
+		write_token(fout, t);
+		fflush(fout);
+		free(t->data);
+	}
+
+	fclose(fout);
+
+	vect_end(&tokens);
+}
+
 // Entrypoint
 
 void help() {
@@ -2132,6 +2184,18 @@ int main(int argc, char ** argv) {
 		return 1;
 	} else if (strcmp(argv[1], "-v") == 0) {
 		printf("C based TNSL Compiler (CTC) - version 0.1\n");
+		return 0;
+	} else if (strcmp(argv[1], "-t") == 0) {
+		Artifact in = art_from_str(argv[2], '/');
+		Artifact out;
+		if (argc == 3) {
+			out = art_from_str("out.asm", '/');
+		} else {
+			out = art_from_str(argv[3], '/');
+		}
+		tokenize(&in, &out);
+		art_end(&in);
+		art_end(&out);
 		return 0;
 	}
 
