@@ -404,7 +404,7 @@ Type *typ_get_inbuilt(char *name) {
 
 // Variables
 
-// Initializes the variable, copying name, not copying type.
+// Initializes the variable, copying name, not deep copying type as it is a pointer.
 Variable var_init(char *name, Type *type) {
 	Variable out = {0};
 	
@@ -446,6 +446,7 @@ Variable _op_coerce(Variable *base, Variable *to_coerce) {
 }
 
 // TODO: Operations on variables
+
 
 // Functions
 
@@ -1992,6 +1993,35 @@ void phase_1(Artifact *path, Module *root) {
 
 // Phase 2
 
+typedef struct Scope {
+	char *name;
+	Module *current;
+	Vector vars;
+	struct Scope *parent;
+} Scope;
+
+Scope scope_init(char *name, Module *mod) {
+	Scope out = {0};
+
+	Vector cpy = vect_from_string(name);
+	out.name = vect_as_string(&cpy);
+
+	out.vars = vect_init(sizeof(Variable));
+	out.current = mod;
+
+	return out;
+}
+
+void scope_end(Scope *s) {
+	free(s->name);
+	
+	for(size_t i = 0; i < s->vars.count; i++) {
+		Variable *v = vect_get(&s->vars, i);
+		var_end(v);
+	}
+	vect_end(&s->vars);
+}
+
 bool p2_error = false;
 
 /* Op order
@@ -2006,23 +2036,23 @@ bool p2_error = false;
  * 2: ++ --
  * Increment/decrement
  *
- * 3: len
+ * 3: ~
+ * Get reference
+ *
+ * 4: len
  * length of array or type
  *
- * 4: * / %
+ * 5: * / %
  * Multiplication/division
  * 
- * 5: + -
+ * 6: + -
  * Addition/subtraction
  *
- * 6: ! & | ^ << >> !& !| !^
+ * 7: ! & | ^ << >> !& !| !^
  * Bitwise operations (and boolean not)
  *
- * 7: == && || ^^ < > !== !&& !|| !^^ !< !> <== >==
+ * 8: == && || ^^ < > !== !&& !|| !^^ !< !> <== >==
  * Boolean operations
- *
- * 8: ~
- * Get reference
  *
  * 9: = *= /= %= += -= etc.
  * Assignment operators
@@ -2047,22 +2077,22 @@ int op_order(Token *t) {
 			return 0;
 		case '`':
 			return 1;
+		case '~':
+			return 3;
 		case '*':
 		case '/':
 		case '%':
-			return 4;
+			return 5;
 		case '+':
 		case '-':
-			return 5;
+			return 6;
 		case '!':
 		case '&':
 		case '|':
 		case '^':
-			return 6;
+			return 7;
 		case '<':
 		case '>':
-			return 7;
-		case '~':
 			return 8;
 		case '=':
 			return 9;
@@ -2073,40 +2103,156 @@ int op_order(Token *t) {
 			if (t->data[1] == '+' || t->data[1] == '-')
 				return 2;
 			if (t->data[0] == '<' || t->data[0] == '>')
-				return 6;
-			return 7;
+				return 7;
+			return 8;
 		}
 
 		if (t->data[1] == '<' || t->data[1] == '>')
-			return 7;
-
-		if (t->data[1] == '=')
 			return 8;
 
+		if (t->data[1] == '=')
+			return 9;
+
 		if (t->data[0] == '!')
-			return 6;
+			return 7;
 	} else if (l == 3) {
 		if(tok_str_eq(t, "len"))
-			return 3;
-		return 6;
+			return 4;
+		return 7;
 	}
 	
 	return -1;
 }
 
-Variable eval(Module *root, CompData *out, Vector *tokens, size_t *pos) {
+// TODO: Operator evaluation, variable members, literals, function calls
+Variable eval(Scope *s, CompData *out, Vector *tokens, size_t *pos) {
 	Variable store;
 	return store;
 }
 
+// TODO determine weather to break this into two functions (one for inside functions, one for top-level)
+Variable p2_compile_def(Scope *s, CompData *out, Vector *tokens, size_t *pos) {
+	return eval(s, out, tokens, pos);
+}
+
+// TODO (depends on top-level defs working)
 void p2_compile_enum(Module *root, CompData *out, Vector *tokens, size_t *pos) {
+	int end = tnsl_find_closing(tokens, *pos);
+	Token *t = vect_get(tokens, *pos);
 	
+	if(end < 0) {
+		printf("ERROR: Could not find closing for enum \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+		p2_error = true;
+		return;
+	}
+
+}
+
+// TODO loop blocks, if blocks, else blocks
+void p2_compile_control(Scope *s, CompData *out, Vector *tokens, size_t *pos) {
+	int end = tnsl_find_closing(tokens, *pos);
+	Token *t = vect_get(tokens, *pos);
+	
+	if(end < 0) {
+		printf("ERROR: Could not find closing for control block \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+		p2_error = true;
+		return;
+	}
+
 }
 
 void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *pos) {
+	int end = tnsl_find_closing(tokens, *pos);
+	Token *start = vect_get(tokens, *pos);
+	
+	if(end < 0) {
+		printf("ERROR: Could not find closing for function \"%s\" (%d:%d)\n\n", start->data, start->line, start->col);
+		p2_error = true;
+		return;
+	}
+
+	Token *t = vect_get(tokens, *pos);
+	while (t != NULL && *pos < (size_t)end && t->type != TT_DEFWORD) {
+		t = vect_get(tokens, ++(*pos));
+		if(tok_str_eq(t, "\n"))
+			break;
+	}
+
+	if(t == NULL || t->type != TT_DEFWORD) {
+		printf("ERROR: Could not user defined name for function \"%s\" (%d:%d)\n\n", start->data, start->line, start->col);
+		p2_error = true;
+		return;
+	}
+
+	// fart
+	Artifact f_art = art_from_str(t->data, ' ');
+	Function *f = mod_find_func(root, &f_art);
+	art_end(&f_art);
+
+	Scope fs = scope_init(t->data, root);
+
+	while(*pos < (size_t)end) {
+		t = vect_get(tokens, ++(*pos));
+		if(tok_str_eq(t, "\n"))
+			break;
+	}
+
+	for(*pos += 1; *pos < (size_t)end; *pos += 1) {
+		t = vect_get(tokens, ++(*pos));
+		if (tok_str_eq(t, "/;") || tok_str_eq(t, ";;")) {
+			size_t b_open = *pos;
+			
+			if(tnsl_block_type(tokens, *pos) == BT_CONTROL) {
+				p2_compile_control(&fs, out, tokens, pos);
+			} else {
+				printf("ERROR: Only control blocks (if, else, loop, switch) are valid inside functions (%d:%d)\n\n", t->line, t->col);
+				p2_error = true;
+			}
+
+			if (*pos == b_open) {
+				*pos = tnsl_find_closing(tokens, b_open);
+			} else if (tok_str_eq(t, ";;")) {
+				*pos -= 1;
+			}
+
+		} else if (tnsl_is_def(tokens, *pos)) {
+			p2_compile_def(&fs, out, tokens, pos);
+		} else {
+			// TODO: figure out eval parameter needs (maybe needs start and end size_t?)
+			// and how eval will play into top level defs (if at all)
+			eval(&fs, out, tokens, pos);
+		}
+	}
+
+	*pos = end;
 }
 
 void p2_compile_method(Module *root, CompData *out, Vector *tokens, size_t *pos) {
+	int end = tnsl_find_closing(tokens, *pos);
+	Token *t = vect_get(tokens, *pos);
+	
+	if(end < 0) {
+		printf("ERROR: Could not find closing for method \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+		p2_error = true;
+		return;
+	}
+
+	*pos += 2;
+	t = vect_get(tokens, *pos);
+
+	if (t == NULL || t->type != TT_DEFWORD) {
+		printf("ERROR: Expected user defined type after 'method' keyword (%d:%d)\n\n", t->line, t->col);
+		*pos = end;
+		p2_error = true;
+		return;
+	}
+
+	Vector sub_name = vect_from_string("@");
+	vect_push_string(&sub_name, t->data);
+
+	// TODO: method loop
+
+	mod_find_sub(root, vect_as_string(&sub_name));
 }
 
 void p2_file_loop(
@@ -2273,16 +2419,22 @@ void p2_file_loop(
 			} else if (tok_str_eq(t, ";;")) {
 				start--;
 			}
-		} else if (t->type == TT_KEYWORD && tok_str_eq(t, "struct")) {
-			p1_parse_struct(root, tokens, &start);
 		} else if (tnsl_is_def(tokens, start)) {
-			p1_parse_def(root, tokens, &start);
+			// TODO: top level defs
+		} else if (tok_str_eq(t, "asm")) {
+			// TODO: top level asm should go where?
 		}
 	}
 }
 
+void p2_finalize_data(Module *root, CompData *out) {
+	// TODO: deal with all module vars, create data section.
+}
+
 CompData phase_2(Artifact *path, Module *root) {
-	return p2_compile_file(path, root);
+	CompData out = p2_compile_file(path, root);
+	p2_finalize_data(root, &out);
+	return out;
 }
 
 void compile(Artifact *path_in, Artifact *path_out) {
