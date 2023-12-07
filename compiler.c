@@ -378,15 +378,15 @@ Type TYP_INBUILT[] = {
 	{"uint16", 2, {0}, NULL},
 	{"uint32", 4, {0}, NULL},
 	{"uint64", 8, {0}, NULL},
-	{"uint", 8, {0}, NULL},
+	{"uint", 8, {0}, NULL}, // Platform max uint
 	{"int8", 1, {0}, NULL},
 	{"int16", 2, {0}, NULL},
 	{"int32", 4, {0}, NULL},
 	{"int64", 8, {0}, NULL},
-	{"int", 8, {0}, NULL},
+	{"int", 8, {0}, NULL}, // Platform max int
 	{"float32", 4, {0}, NULL},
 	{"float64", 8, {0}, NULL},
-	{"float", 8, {0}, NULL},
+	{"float", 8, {0}, NULL}, // Platform max float
 	{"bool", 1, {0}, NULL},
 	{"void", 8, {0}, NULL},
 };
@@ -2027,17 +2027,17 @@ bool p2_error = false;
 /* Op order
  * first is parens (not handled here)
  * 
- * 0: .
- * get member or method
- * 
- * 1: `
+ * 0: `
  * dereference
  *
- * 2: ++ --
- * Increment/decrement
+ * 1: .
+ * get member or method
  *
- * 3: ~
+ * 2: ~
  * Get reference
+ *
+ * 3: ++ --
+ * Increment/decrement
  *
  * 4: len
  * length of array or type
@@ -2051,13 +2051,17 @@ bool p2_error = false;
  * 7: ! & | ^ << >> !& !| !^
  * Bitwise operations (and boolean not)
  *
- * 8: == && || ^^ < > !== !&& !|| !^^ !< !> <== >==
- * Boolean operations
+ * 8: == !== < > !< !> <== >==
+ * Boolean compare
  *
- * 9: = *= /= %= += -= etc.
+ * 9: && || ^^ !&& !|| !^^
+ * Boolean logic
+ *
+ * 10: = *= /= %= += -= etc.
  * Assignment operators
  */
 
+// TODO: Test
 // returns the integer prescident of the operator (lower means first)
 int op_order(Token *t) {
 	if (t == NULL || t->type != TT_AUGMENT) {
@@ -2073,12 +2077,12 @@ int op_order(Token *t) {
 	
 	if(l == 1) {
 		switch(t->data[0]) {
-		case '.':
-			return 0;
 		case '`':
+			return 0;
+		case '.':
 			return 1;
 		case '~':
-			return 3;
+			return 2;
 		case '*':
 		case '/':
 		case '%':
@@ -2095,33 +2099,67 @@ int op_order(Token *t) {
 		case '>':
 			return 8;
 		case '=':
-			return 9;
+			return 10;
 		}
 	} else if (l == 2) {
 
 		if(t->data[0] == t->data[1]) {
 			if (t->data[1] == '+' || t->data[1] == '-')
-				return 2;
+				return 3;
 			if (t->data[0] == '<' || t->data[0] == '>')
 				return 7;
-			return 8;
+			if (t->data[0] == '=')
+				return 8;
+			return 9;
 		}
 
 		if (t->data[1] == '<' || t->data[1] == '>')
 			return 8;
 
 		if (t->data[1] == '=')
-			return 9;
+			return 10;
 
 		if (t->data[0] == '!')
 			return 7;
 	} else if (l == 3) {
 		if(tok_str_eq(t, "len"))
 			return 4;
-		return 7;
+		if(t->data[1] == '=')
+			return 8;
+		return 9;
 	}
 	
 	return -1;
+}
+
+// Strict eval for top-level definitions
+void eval_strict() {
+}
+
+// Main implementation, recursive
+Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t end, int *level) {
+	Variable out;
+
+	int op = -1;
+	int op_pos = 0;
+	int delim = -1;
+
+	for(size_t i = start; i < end; i++) {
+		Token *t = vect_get(tokens, i);
+		if (t->type == TT_DELIMIT) {
+			if(delim < 0) {
+				delim = i;
+			}
+			i = tnsl_find_closing(tokens, i);
+		} else if (t->type == TT_AUGMENT && (op < 0 || op_order(t) > op)) {
+			op = op_order(t);
+			op_pos = i;
+		}
+	}
+
+	// Found first delim and lowest priority op
+
+	return out;
 }
 
 // TODO: Operator evaluation, variable members, literals, function calls
