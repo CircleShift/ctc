@@ -1281,6 +1281,53 @@ int tnsl_find_closing(Vector *tokens, size_t cur) {
 	return -1;
 }
 
+char tnsl_unquote_char(char *str) {
+	if(str == NULL)
+		return 0;
+
+	if(*str == '\\') {
+		switch(str[1]) {
+			case '\\':
+				return '\\';
+			case '\'':
+				return '\'';
+			case '"':
+				return '"';
+			case 'n':
+				return '\n';
+			case 'r':
+				return '\r';
+			case '0':
+				return 0;
+			case 't':
+				return '\t';
+		}
+	}
+
+	return str[0];
+}
+
+char *tnsl_unquote_str(char *literal) {
+	int len = strlen(literal);
+	if (len < 2)
+		return NULL;
+
+	Vector str_out = vect_init(sizeof(char));
+	char end = literal[0];
+	for(int i = 1; i < len; i++) {
+		if(literal[i] == end)
+			break;
+		else if (literal[i] == '\\') {
+			char tmp = tnsl_unquote_char(literal + i);
+			vect_push(&str_out, &tmp);
+			i++;
+		} else
+			vect_push(&str_out, literal + i);
+	}
+
+	return str_out.data;
+}
+
 int tnsl_block_type(Vector *tokens, size_t cur) {
 	
 	for (cur++; cur < tokens->count; cur++) {
@@ -2457,10 +2504,17 @@ void p2_file_loop(
 			} else if (tok_str_eq(t, ";;")) {
 				start--;
 			}
-		} else if (tnsl_is_def(tokens, start)) {
-			// TODO: top level defs
 		} else if (tok_str_eq(t, "asm")) {
 			// TODO: top level asm should go where?
+			start++;
+			t = vect_get(tokens, start);
+			if(t != NULL && t->type == TT_LITERAL) {
+				char *push = tnsl_unquote_str(t->data);
+				if (push != NULL) {
+					vect_push_string(&out->header, push);
+					free(push);
+				}
+			}
 		}
 	}
 }
@@ -2558,10 +2612,10 @@ void tokenize(Artifact *path_in, Artifact *path_out) {
 	for(size_t i = 0; i < tokens.count; i++) {
 		Token *t = vect_get(&tokens, i);
 		write_token(fout, t);
-		fflush(fout);
 		free(t->data);
 	}
 
+	fflush(fout);
 	fclose(fout);
 
 	vect_end(&tokens);
