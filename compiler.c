@@ -673,7 +673,7 @@ char *KEYTYPES = "uint8,uint16,uint32,uint64,uint,int8,int16,int32,int64,int,flo
 
 char *RESERVED = "~`!@#$%^&*()[]{}+-=\"\'\\|:;/?>.<,";
 
-char *OPS = "~`!%&|^*/+-=.<>";
+char *OPS = "~`!%&|^*/+-=.<>@";
 char *MULTI_OPS = "==,&&,||,^^,!==,!&&,!||,!^^,!<,!>,<<,>>,!&,!|,!^,++,--,>==,<==,+=,-=,*=,/=,%=,!=,&=,|=,^=,~=,`=";
 
 char *DELIMS = "()[]{}";
@@ -2336,8 +2336,24 @@ void p2_compile_method(Module *root, CompData *out, Vector *tokens, size_t *pos)
 	vect_push_string(&sub_name, t->data);
 
 	// TODO: method loop
+	Module *mmod = mod_find_sub(root, vect_as_string(&sub_name));
+	vect_end(&sub_name);
 
-	mod_find_sub(root, vect_as_string(&sub_name));
+	for(;*pos < end;*pos = tnsl_next_non_nl(tokens, *pos)) {
+		t = vect_get(tokens, *pos);
+		if(tok_str_eq(t, "/;") != true && tok_str_eq(t, ";;") != true) {
+			continue;
+		}
+
+		p2_compile_function(mmod, out, tokens, pos);
+		
+		t = vect_get(tokens, *pos);
+		if(tok_str_eq(t, ";;")) {
+			*pos -= 1;
+		}
+	}
+	
+	*pos = end;
 }
 
 void p2_file_loop(
