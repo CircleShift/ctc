@@ -2255,14 +2255,40 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 }
 
 // TODO: Operator evaluation, variable members, literals, function calls
-Variable eval(Scope *s, CompData *out, Vector *tokens, size_t *pos) {
+Variable eval(Scope *s, CompData *out, Vector *tokens, size_t *pos, bool keep) {
 	Variable store;
+
+	size_t start = *pos;
+	size_t end = start;
+	for (; end < tokens->count; end++) {
+		Token *chk = vect_get(tokens, end);
+		if(chk->type == TT_SPLITTR) {
+			break;
+		} else if (chk->type == TT_DELIMIT) {
+			int i = tnsl_find_closing(tokens, end);
+			if(i > 0) {
+				end = i;
+				continue;
+			}
+			break;
+		}
+	}
+
+	int level = 1;
+	store = _eval(s, out, tokens, start, end, &level);
+	
+	if(keep && store.location <= 0) {
+		var_op_reference(out, &store, &store);
+	} else if(keep && store.location > 0) {
+		var_swap_register(out, &store, 1);
+	}
+	
 	return store;
 }
 
 // TODO determine weather to break this into two functions (one for inside functions, one for top-level)
 Variable p2_compile_def(Scope *s, CompData *out, Vector *tokens, size_t *pos) {
-	return eval(s, out, tokens, pos);
+	return eval(s, out, tokens, pos, false);
 }
 
 // TODO (depends on top-level defs working)
@@ -2295,7 +2321,7 @@ void p2_compile_control(Scope *s, CompData *out, Vector *tokens, size_t *pos) {
 void _p2_handle_method_scope(Module *root, CompData *out, Scope *fs) {
 	Artifact t_art = art_from_str((root->name + 1), '.');
 	Type *t = mod_find_type(root, &t_art);
-	art_end(&tart);
+	art_end(&t_art);
 	Variable self = var_init("self", t);
 	
 }
@@ -2356,12 +2382,14 @@ void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *po
 				*pos -= 1;
 			}
 
+		} else if (t->type == TT_KEYWORD) {
+			
 		} else if (tnsl_is_def(tokens, *pos)) {
 			p2_compile_def(&fs, out, tokens, pos);
 		} else {
 			// TODO: figure out eval parameter needs (maybe needs start and end size_t?)
 			// and how eval will play into top level defs (if at all)
-			eval(&fs, out, tokens, pos);
+			eval(&fs, out, tokens, pos, false);
 		}
 	}
 
