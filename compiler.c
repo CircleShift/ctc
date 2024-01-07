@@ -446,6 +446,27 @@ Variable _op_coerce(Variable *base, Variable *to_coerce) {
 }
 
 // TODO: Operations on variables
+// remember for location: negative = on stack, zero = in DS, positive = in register
+// Only values allowed in registers are in-built types and primitives (pointers/references)
+// Other values must be in data section or on stack
+// De-referencing = changing from a pointer to a reference
+// referencing = changing from a variable to a pointer (can only be done for non-literals on stack or in DS)
+// indexing returns a reference to the memory
+// with an array => pointer + 8 bytes (length of array at start) + index * size of data
+// with a pointer => pointer + index * size of data
+
+void var_op_reference(CompData *out, Variable *store, Variable *from) {}
+void var_op_dereference(CompData *out, Variable *store, Variable *from) {}
+void var_op_index(CompData *out, Variable *store, Variable *from, Variable *index) {}
+
+void var_op_set(CompData *out, Variable *store, Variable *from) {}
+Variable var_op_member(Variable *from, char *member) {
+	Variable out;
+	return out;
+}
+
+void var_op_add(CompData *out, Variable *base, Variable *add) {}
+void var_op_sub(CompData *out, Variable *base, Variable *sub) {}
 
 
 // Functions
@@ -1664,6 +1685,16 @@ void p1_parse_function(Module *root, Vector *tokens, size_t *pos) {
 			free(out.name);
 			Vector copy = vect_from_string(t->data);
 			out.name = vect_as_string(&copy);
+
+			for(size_t i = 0; i < root->funcs.count; i++) {
+				Function *chk = vect_get(&root->funcs, i);
+				if(strcmp(chk->name, out.name) == 0) {
+					printf("ERROR: Redefinition of function with name '%s' at (%d:%d)\n", out.name, t->line, t->col);
+					func_end(&out);
+					*pos = end;
+					return;
+				}
+			}
 		} else if (tok_str_eq(t, "(")) {
 			p1_parse_params(&(out.inputs), tokens, pos);
 		} else if (tok_str_eq(t, "[")) {
@@ -1752,12 +1783,26 @@ void p1_parse_module(Artifact *path, Module *root, Vector *tokens, size_t *pos) 
 	}
 	char *name = t->data;
 
-	Module out = mod_init(name, root, export);
+	Module *out = NULL;
+	for(size_t i = 0; i < root->submods.count; i++) {
+		Module *chk = vect_get(&root->submods, i);
+		if (strcmp(chk->name, name) == 0) {
+			out = chk;
+			break;
+		}
+	}
 
-	p1_file_loop(path, &out, tokens, *pos, end);
+	if (out == NULL) {
+		Module tmp = mod_init(name, root, export);
+		out = &tmp;
+		p1_file_loop(path, out, tokens, *pos, end);
+		vect_push(&(root->submods), out);
+	} else {
+		p1_file_loop(path, out, tokens, *pos, end);
+		vect_push(&(root->submods), out);
+	}
 
 	*pos = end;
-	vect_push(&(root->submods), &out);
 }
 
 
@@ -2246,6 +2291,15 @@ void p2_compile_control(Scope *s, CompData *out, Vector *tokens, size_t *pos) {
 
 }
 
+// Handles the 'self' variable in the case where the function is in a method block.
+void _p2_handle_method_scope(Module *root, CompData *out, Scope *fs) {
+	Artifact t_art = art_from_str((root->name + 1), '.');
+	Type *t = mod_find_type(root, &t_art);
+	art_end(&tart);
+	Variable self = var_init("self", t);
+	
+}
+
 void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *pos) {
 	int end = tnsl_find_closing(tokens, *pos);
 	Token *start = vect_get(tokens, *pos);
@@ -2275,11 +2329,13 @@ void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *po
 	art_end(&f_art);
 
 	Scope fs = scope_init(t->data, root);
+	_p2_handle_method_scope();
 
 	while(*pos < (size_t)end) {
-		t = vect_get(tokens, ++(*pos));
+		t = vect_get(tokens, *pos);
 		if(tok_str_eq(t, "\n"))
 			break;
+		*pos += 1;
 	}
 
 	for(*pos += 1; *pos < (size_t)end; *pos += 1) {
