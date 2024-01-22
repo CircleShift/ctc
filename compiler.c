@@ -307,6 +307,54 @@ void cdat_end(CompData *cdat) {
 
 
 
+// Gen utils
+
+char *int_to_str(int i) {
+	Vector v = vect_init(sizeof(char));
+	
+	char to_push = '0';
+	bool minus = false;
+
+	// check negative
+	if(i < 0) {
+		i = -i;
+		minus = true;
+	}
+
+	// zero case
+	if(i == 0) {
+		vect_push(&v, &to_push);
+	}
+
+	// get all digits (in reverse order)
+	while(i > 0) {
+		to_push = '0' + i % 10;
+		i = i / 10;
+		vect_push(&v, &to_push);
+	}
+
+	// handle negative
+	if(minus) {
+		to_push = '-';
+		vect_push(&v, &to_push);
+	}
+
+	// reverse string
+	for(size_t idx = 0; idx < v.count / 2; idx++) {
+		to_push = *(char*)vect_get(&v, idx);
+		((char*)v.data)[idx] = ((char*)v.data)[v.count - (idx + 1)];
+		((char*)v.data)[v.count - (idx + 1)] = to_push;
+	}
+
+	//push 0
+	to_push = 0;
+	vect_push(&v, &to_push);
+
+	return v.data;
+}
+
+
+
 // Types
 
 typedef struct Module {
@@ -437,6 +485,119 @@ void var_end(Variable *v) {
 }
 
 // Variable operations
+
+Vector _reg_by_id(int id) {
+	Vector out = vect_init(sizeof(char));
+
+	switch (id) {
+	case 0:
+		vect_push_string(&out, "ax");
+		break;
+	case 1:
+		vect_push_string(&out, "bx");
+		break;
+	case 2:
+		vect_push_string(&out, "cx");
+		break;
+	case 3:
+		vect_push_string(&out, "dx");
+		break;
+	case 4:
+		vect_push_string(&out, "si");
+		break;
+	case 5:
+		vect_push_string(&out, "di");
+		break;
+	case 6:
+		vect_push_string(&out, "sp");
+		break;
+	case 7:
+		vect_push_string(&out, "bp");
+		break;
+	}
+
+	if(id > 7) {
+		char *num = int_to_str(id);
+		vect_push_string(&out, num);
+		free(num);
+	}
+
+	return out;
+}
+
+char *_reg_by_id_size(int id, int size, bool address) {
+	Vector reg = _reg_by_id(id);
+	// If address, prefix with the desired size (byte, word, dword, or qword respectively)
+	Vector prefix = vect_init(sizeof(char));
+
+	if(address) {
+		switch(size) {
+		case 1:
+			vect_push_string(&prefix, "byte ");
+			break;
+		case 2:
+			vect_push_string(&prefix, "word ");
+			break;
+		case 4:
+			vect_push_string(&prefix, "dword ");
+			break;
+		case 8:
+			vect_push_string(&prefix, "qword ");
+			break;
+		}
+	}
+
+	if(id > 7) {
+		char pref = 'r';
+		vect_insert(&reg, 0, &pref);
+	}
+
+	switch(size) {
+	case 1:
+		if(id > 7) {
+			char suff = 'b';
+			vect_push(&reg, &suff);
+		} else if (id > 3) {
+			char suff = 'l';
+			vect_push(&reg, &suff);
+		} else {
+			((char*)reg.data)[1] = 'l';
+		}
+		break;
+	case 2:
+		if(id > 7) {
+			char suff = 'w';
+			vect_push(&reg, &suff);
+		}
+		break;
+	case 4:
+		if (id > 7) {
+			char suff = 'd';
+			vect_push(&reg, &suff);
+		} else {
+			char pref = 'e';
+			vect_insert(&reg, 0, &pref);
+		}
+		break;
+	case 8:
+		if (id < 8) {
+			char pref = 'r';
+			vect_insert(&reg, 0, &pref);
+		}
+	}
+
+	if (address) {
+		char brack = '[';
+		vect_insert(&reg, 0, &brack);
+		brack = ']';
+		vect_push(&reg, &brack);
+	}
+
+	vect_push_string(&prefix, vect_as_string(&reg));
+	vect_end(&reg);
+
+	return vect_as_string(&prefix);
+}
 
 // Type coercion engine
 // TODO: all
