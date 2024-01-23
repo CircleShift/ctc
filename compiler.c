@@ -657,14 +657,69 @@ int _var_ptr_type(Variable *v) {
 	return ((int*)v->ptr_chain.data)[v->ptr_chain.count - 1];
 }
 
-char *_var_loc_str(Variable *v) {
+char *_op_get_register(int reg, int size) {
+	Vector out = vect_init(sizeof(char));
+	char add = 'r';
+
+	switch(size) {
+		case 1:
+		case 2:
+			break;
+		case 4:
+			add = 'e';
+		case 8:
+			vect_push(&out, &add);
+			break;
+		default:
+			printf("ERROR: invalid register size %d (this is a compiler issue)\n", size);
+			vect_push(&out, &add);
+			break;
+	}
+
+	switch(reg) {
+		case 1:
+		case 2:
+		case 3:
+		case 4:
+			add = 'a' + (reg - 1);
+			break;
+		case 5:
+		case 7:
+			add = 's';
+			break;
+		case 6:
+			add = 'd';
+			break;
+		case 8:
+			add = 'b';
+			break;
+		default:
+			printf("ERROR: Unknown register %d (this is a compiler issue)\n", reg);
+			break;
+	}
+	vect_push(&out, &add);
+
+	//TODO: Ending
+
+	return out.data;
+}
+
+char *_op_get_location(Variable *var, int location) {
+	Vector out = vect_init(sizeof(char));
+	if(location < 0) {
+	} else if (location == 0) {
+	} else {
+	}
+}
+
+void var_swap_register(CompData *out, Variable *swap, int new_reg) {
+	if(swap->location == new_reg)
+		return;
 	
-}
-
-void var_op_dereference(CompData *out, Variable *store, Variable *from) {
-
 
 }
+
+void var_op_dereference(CompData *out, Variable *store, Variable *from) {}
 void var_op_index(CompData *out, Variable *store, Variable *from, Variable *index) {}
 
 void var_op_set(CompData *out, Variable *store, Variable *from) {}
@@ -2551,10 +2606,19 @@ void _p2_handle_method_scope(Module *root, CompData *out, Scope *fs) {
 	
 }
 
+void _p2_func_scope_init(Module *root, CompData *out, Scope *fs) {
+
+}
+
+void _p2_func_scope_end(CompData *out, Scope *fs) {
+
+}
+
 void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *pos) {
 	int end = tnsl_find_closing(tokens, *pos);
 	Token *start = vect_get(tokens, *pos);
 	
+	// Pre-checks for end of function and function name so scope can be initialized
 	if(end < 0) {
 		printf("ERROR: Could not find closing for function \"%s\" (%d:%d)\n\n", start->data, start->line, start->col);
 		p2_error = true;
@@ -2566,6 +2630,9 @@ void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *po
 		t = vect_get(tokens, ++(*pos));
 		if(tok_str_eq(t, "\n"))
 			break;
+		else if (t->type == TT_DELIMIT && !tok_str_eq(t, ";/") && !tok_str_eq(t, ";;")) {
+			*pos = tnsl_find_closing(tokens, *pos);
+		}
 	}
 
 	if(t == NULL || t->type != TT_DEFWORD) {
@@ -2579,8 +2646,12 @@ void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *po
 	Function *f = mod_find_func(root, &f_art);
 	art_end(&f_art);
 
+	// Scope init
 	Scope fs = scope_init(t->data, root);
-	_p2_handle_method_scope();
+	if(root->name[0] == '@') {
+		_p2_handle_method_scope(root, out, &fs);
+	}
+	_p2_func_scope_init(root, out, &fs);
 
 	while(*pos < (size_t)end) {
 		t = vect_get(tokens, *pos);
@@ -2608,7 +2679,32 @@ void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *po
 			}
 
 		} else if (t->type == TT_KEYWORD) {
-			
+			if(tok_str_eq(t, "return")) {
+				t = vect_get(tokens, *pos + 1);
+				if (f->outputs.count > 0) {
+					if (*pos + 1 < end && !tok_str_eq(t, "\n"))
+						eval(&fs, out, tokens, pos, true);
+					else {
+						t = vect_get(tokens, *pos);
+						printf("ERROR: Attempt to return from a function without a value, but the function requires one (%d:%d)", t->line, t->col);
+						p2_error = true;
+					}
+				}
+				_p2_func_scope_end(out, &fs);
+				*pos = end;
+				return;
+			} else if (tok_str_eq(t, "asm")) {
+				t = vect_get(tokens, ++(*pos));
+				if(t->type != TT_LITERAL || t->data[0] != '"') {
+					printf("ERROR: Expected string literal after asm keyword (%d:%d)\n", t->line, t->col);
+					p2_error = true;
+				} else {
+					char *m = tnsl_unquote_str(t->data);
+					vect_push_string(&out->text, m);
+					vect_push_string(&out->text, "\n");
+					free(m);
+				}
+			}
 		} else if (tnsl_is_def(tokens, *pos)) {
 			p2_compile_def(&fs, out, tokens, pos);
 		} else {
@@ -2837,6 +2933,7 @@ void p2_file_loop(
 				char *push = tnsl_unquote_str(t->data);
 				if (push != NULL) {
 					vect_push_string(&out->header, push);
+					vect_push_string(&out->header, "\n");
 					free(push);
 				}
 			}
