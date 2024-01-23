@@ -545,6 +545,7 @@ char *_reg_by_id_size(int id, int size, bool address) {
 			vect_push_string(&prefix, "qword ");
 			break;
 		}
+		size = 8;
 	}
 
 	if(id > 7) {
@@ -599,6 +600,37 @@ char *_reg_by_id_size(int id, int size, bool address) {
 	return vect_as_string(&prefix);
 }
 
+/// Remember to free!
+char *_gen_address(char *prefix, char *base, char *offset, int mult, int add) {
+	Vector out = vect_init(sizeof(char));
+
+	vect_push_string(&out, prefix);
+	vect_push_string(&out, "[");
+	vect_push_string(&out, base);
+	
+	if (offset != NULL && mult > 0) {
+		vect_push_string(&out, " + ");
+		vect_push_string(&out, offset);
+		if(mult > 1) {
+			vect_push_string(&out, "*");
+			char *mstr = int_to_str(mult);
+			vect_push_string(&out, mstr);
+			free(mstr);
+		}
+	}
+
+	if(add > 0) {
+		vect_push_string(&out, " + ");
+		char *astr = int_to_str(add);
+		vect_push_string(&out, astr);
+		free(astr);
+	}
+	
+	vect_push_string(&out, "]");
+
+	return vect_as_string(&out);
+}
+
 // Type coercion engine
 // TODO: all
 Variable _op_coerce(Variable *base, Variable *to_coerce) {
@@ -616,11 +648,43 @@ Variable _op_coerce(Variable *base, Variable *to_coerce) {
 // with an array => pointer + 8 bytes (length of array at start) + index * size of data
 // with a pointer => pointer + index * size of data
 
-void var_op_reference(CompData *out, Variable *store, Variable *from) {}
-void var_op_dereference(CompData *out, Variable *store, Variable *from) {}
+// Get the last value from ptr_chain
+int _var_ptr_type(Variable *v) {
+	if(v->ptr_chain.count < 1) {
+		// Return an invalid value if ptr_chain has no values.
+		return -2;
+	}
+	return ((int*)v->ptr_chain.data)[v->ptr_chain.count - 1];
+}
+
+char *_var_loc_str(Variable *v) {
+	
+}
+
+void var_op_dereference(CompData *out, Variable *store, Variable *from) {
+
+
+}
 void var_op_index(CompData *out, Variable *store, Variable *from, Variable *index) {}
 
 void var_op_set(CompData *out, Variable *store, Variable *from) {}
+
+void var_op_reference(CompData *out, Variable *store, Variable *from) {
+	if(from->ptr_chain.count > 0 && _var_ptr_type(from) == PTYPE_REF) {
+		// The value is a reference to data, so we should just copy it
+		var_op_set(out, store, from);
+		return;
+	}
+
+	if(from->location > 0) {
+		// Can't generate reference if variable is in register
+		printf("FATAL: (Compiler error) attempt to generate reference to a variable in a register.\n");
+		return;
+	}
+
+
+}
+
 Variable var_op_member(Variable *from, char *member) {
 	Variable out;
 	return out;
