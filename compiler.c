@@ -619,12 +619,18 @@ char *_gen_address(char *prefix, char *base, char *offset, int mult, int add) {
 		}
 	}
 
-	if(add > 0) {
-		vect_push_string(&out, " + ");
+	if(add != 0) {
+		if (add > 0) {
+			vect_push_string(&out, " + ");
+		} else {
+			vect_push_string(&out, " - ");
+			add = -add;
+		}
 		char *astr = int_to_str(add);
 		vect_push_string(&out, astr);
 		free(astr);
 	}
+
 	
 	vect_push_string(&out, "]");
 
