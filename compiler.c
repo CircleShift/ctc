@@ -663,6 +663,9 @@ int _var_ptr_type(Variable *v) {
 	return ((int*)v->ptr_chain.data)[v->ptr_chain.count - 1];
 }
 
+// Valid registers to use in operations:
+// rax (1), rdx (4), rsi (5), rdi (6).  Other registers assumed to be used by
+// variables
 char *_op_get_register(int reg, int size) {
 	Vector out = vect_init(sizeof(char));
 	char add = 'r';
@@ -718,15 +721,86 @@ char *_op_get_location(Variable *var, int location) {
 	}
 }
 
+int _var_size(Variable *var) {
+	size_t count = var->ptr_chain.count;
+	int *ptype = vect_get(&var->ptr_chain, count - 1);
+
+	while(count > 0 && *ptype == PTYPE_REF) {
+		ptype = vect_get(&var->ptr_chain, --count);
+	}
+
+	if(count > 0) {
+		return 8;
+	}
+
+	return var->type->size;
+}
+
+int _var_pure_size(Variable *var) {
+	if ( var->ptr_chain.count > 0 ) {
+		return 8;
+	}
+
+	return var->type->size;
+}
+
 void var_swap_register(CompData *out, Variable *swap, int new_reg) {
 	if(swap->location == new_reg)
 		return;
 	
 
+
 }
 
-void var_op_dereference(CompData *out, Variable *store, Variable *from) {}
-void var_op_index(CompData *out, Variable *store, Variable *from, Variable *index) {}
+// Dereference a pointer variable into a new variable "store".
+// Store is copied from "from" variable, so it should be empty (will not be freed).
+void var_op_dereference(CompData *out, Variable *store, Variable *from) {
+	*store = var_copy(from);
+	if(from->ptr_chain.count < 1) {
+		printf("WARNING: var_op_dereference called on variable which is not a pointer type!");
+		return;
+	}
+
+	// Generate initial move (from -> rsi)
+	vect_push_string(&out->text, "\tmov rsi, ");
+	char *addr;
+	
+	if(from->location < 1) {
+		// It's from an address on stack or in data section
+		if(from->location < 0) {
+			addr = _gen_address("qword ", "rsp", "", 0, from->location);
+		} else {
+			addr = _gen_address("qword ", from->name, "", 0, 0);
+		}
+	} else {
+		// It's from a register
+		addr = _op_get_register(from->location, 8);
+	}
+
+	vect_push_string(&out->text, addr);
+	free(addr);
+	vect_push_string(&out->text, "; Move for dereference\n");
+
+	// Keep de-referencing until we reach the pointer (or ptr_chain bottoms out).
+	int *current = vect_get(&store->ptr_chain, store->ptr_chain.count - 1);
+	while(*current == PTYPE_REF && store->ptr_chain.count > 1) {
+		vect_push_string(&out->text, "\tmov rsi, [rsi] ; Dereference\n");
+		vect_pop(&store->ptr_chain);
+	}
+
+	// pointer type -> ref
+	int ref = PTYPE_REF;
+	current = vect_get(&store->ptr_chain, store->ptr_chain.count - 1);
+	*current = ref;
+	// Location -> rsi (5)
+	store->location = 5;
+}
+
+// Index into an array by "index" elements.  Store the reference to the value in "store".
+// The "store" variable should be freed or empty before calling this function.
+void var_op_index(CompData *out, Variable *store, Variable *from, Variable *index) {
+	
+}
 
 void var_op_set(CompData *out, Variable *store, Variable *from) {}
 
@@ -747,7 +821,7 @@ void var_op_reference(CompData *out, Variable *store, Variable *from) {
 }
 
 Variable var_op_member(Variable *from, char *member) {
-	Variable out;
+	Variable out = var_copy(from);
 	return out;
 }
 
