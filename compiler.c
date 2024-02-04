@@ -111,14 +111,7 @@ void vect_push_string(Vector *v, char *str) {
 }
 
 void vect_push_free_string(Vector *v, char *str) {
-	if (v->_el_sz != sizeof(char)) {
-		return;
-	}
-
-	for (size_t i = 0; str[i] != 0; i++) {
-		vect_insert(v, v->count, str + i);
-	}
-
+	vect_push_string(v, str);
 	free(str);
 }
 
@@ -498,45 +491,6 @@ void var_end(Variable *v) {
 
 // Variable operations
 
-Vector _reg_by_id(int id) {
-	Vector out = vect_init(sizeof(char));
-
-	switch (id) {
-	case 0:
-		vect_push_string(&out, "ax");
-		break;
-	case 1:
-		vect_push_string(&out, "bx");
-		break;
-	case 2:
-		vect_push_string(&out, "cx");
-		break;
-	case 3:
-		vect_push_string(&out, "dx");
-		break;
-	case 4:
-		vect_push_string(&out, "si");
-		break;
-	case 5:
-		vect_push_string(&out, "di");
-		break;
-	case 6:
-		vect_push_string(&out, "sp");
-		break;
-	case 7:
-		vect_push_string(&out, "bp");
-		break;
-	}
-
-	if(id > 7) {
-		char *num = int_to_str(id);
-		vect_push_string(&out, num);
-		free(num);
-	}
-
-	return out;
-}
-
 // Valid prefixes for fasm, take size of data - 1 = index of prefix.
 char *PREFIXES[] = {
 	"byte ",
@@ -548,75 +502,6 @@ char *PREFIXES[] = {
 	"",
 	"qword "
 };
-
-char *_reg_by_id_size(int id, int size, bool address) {
-	Vector reg = _reg_by_id(id);
-	// If address, prefix with the desired size (byte, word, dword, or qword respectively)
-	Vector prefix = vect_init(sizeof(char));
-
-	if(address) {
-		switch(size) {
-		case 1:
-		case 2:
-		case 4:
-		case 8:
-			vect_push_string(&prefix, PREFIXES[size - 1]);
-			break;
-		}
-		size = 8;
-	}
-
-	if(id > 7) {
-		char pref = 'r';
-		vect_insert(&reg, 0, &pref);
-	}
-
-	switch(size) {
-	case 1:
-		if(id > 7) {
-			char suff = 'b';
-			vect_push(&reg, &suff);
-		} else if (id > 3) {
-			char suff = 'l';
-			vect_push(&reg, &suff);
-		} else {
-			((char*)reg.data)[1] = 'l';
-		}
-		break;
-	case 2:
-		if(id > 7) {
-			char suff = 'w';
-			vect_push(&reg, &suff);
-		}
-		break;
-	case 4:
-		if (id > 7) {
-			char suff = 'd';
-			vect_push(&reg, &suff);
-		} else {
-			char pref = 'e';
-			vect_insert(&reg, 0, &pref);
-		}
-		break;
-	case 8:
-		if (id < 8) {
-			char pref = 'r';
-			vect_insert(&reg, 0, &pref);
-		}
-	}
-
-	if (address) {
-		char brack = '[';
-		vect_insert(&reg, 0, &brack);
-		brack = ']';
-		vect_push(&reg, &brack);
-	}
-
-	vect_push_string(&prefix, vect_as_string(&reg));
-	vect_end(&reg);
-
-	return vect_as_string(&prefix);
-}
 
 /// Remember to free!
 char *_gen_address(char *prefix, char *base, char *offset, int mult, int add) {
@@ -841,10 +726,8 @@ void var_op_dereference(CompData *out, Variable *store, Variable *from) {
 	vect_push_string(&out->text, "\tmov rsi, ");
 	if (from->location < 1)
 		vect_push_string(&out->text, PREFIXES[7]);
-	char *addr = _op_get_location(from);
 	
-	vect_push_string(&out->text, addr);
-	free(addr);
+	vect_push_free_string(&out->text, _op_get_location(from));
 	vect_push_string(&out->text, "; Move for dereference\n");
 
 	// Keep de-referencing until we reach the pointer (or ptr_chain bottoms out).
