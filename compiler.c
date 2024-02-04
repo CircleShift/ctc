@@ -110,6 +110,18 @@ void vect_push_string(Vector *v, char *str) {
 	}
 }
 
+void vect_push_free_string(Vector *v, char *str) {
+	if (v->_el_sz != sizeof(char)) {
+		return;
+	}
+
+	for (size_t i = 0; str[i] != 0; i++) {
+		vect_insert(v, v->count, str + i);
+	}
+
+	free(str);
+}
+
 void *vect_get(Vector *v, size_t index) {
 	if (index >= v->count) {
 		return NULL;
@@ -525,6 +537,18 @@ Vector _reg_by_id(int id) {
 	return out;
 }
 
+// Valid prefixes for fasm, take size of data - 1 = index of prefix.
+char *PREFIXES[] = {
+	"byte ",
+	"word ",
+	"",
+	"dword ",
+	"",
+	"",
+	"",
+	"qword "
+};
+
 char *_reg_by_id_size(int id, int size, bool address) {
 	Vector reg = _reg_by_id(id);
 	// If address, prefix with the desired size (byte, word, dword, or qword respectively)
@@ -533,16 +557,10 @@ char *_reg_by_id_size(int id, int size, bool address) {
 	if(address) {
 		switch(size) {
 		case 1:
-			vect_push_string(&prefix, "byte ");
-			break;
 		case 2:
-			vect_push_string(&prefix, "word ");
-			break;
 		case 4:
-			vect_push_string(&prefix, "dword ");
-			break;
 		case 8:
-			vect_push_string(&prefix, "qword ");
+			vect_push_string(&prefix, PREFIXES[size - 1]);
 			break;
 		}
 		size = 8;
@@ -666,6 +684,7 @@ int _var_ptr_type(Variable *v) {
 // Valid registers to use in operations:
 // rax (1), rdx (4), rsi (5), rdi (6).  Other registers assumed to be used by
 // variables
+// 1 - rax; 2 - rbx; 3 - rcx; 4 -  rdx; 5 - rsi; 6 - rdi; 7 - rsp; 8 - rbp; 9-16: r8-r15
 char *_op_get_register(int reg, int size) {
 	Vector out = vect_init(sizeof(char));
 	char add = 'r';
@@ -703,22 +722,56 @@ char *_op_get_register(int reg, int size) {
 			add = 'b';
 			break;
 		default:
-			printf("ERROR: Unknown register %d (this is a compiler issue)\n", reg);
+			if(reg > 8) {
+				char *tmp = int_to_str(reg - 1);
+				vect_push_string(&out, tmp);
+				free(tmp);
+			}
 			break;
 	}
 	vect_push(&out, &add);
 
-	//TODO: Ending
+	add = 'x';
+	switch (reg) {
+		// Cases rsi, rdi, rsp, rbp need extra character
+		case 5:
+		case 6:
+			add = 'i';
+		case 7:
+		case 8:
+			if (add == 'x') {
+				add = 'p';
+			}
+			if (size == 1) {
+				vect_push(&out, &add);
+			}
+		case 1:
+		case 2:
+		case 3:
+		case 4:
+			// Add l if lower 8 bits, just push x otherwise
+			if(size == 1) {
+				add = 'l';
+			}
+			vect_push(&out, &add);
+			break;
+		default:
+			// r8 - r15
+			if (size == 1) {
+				add = 'b';
+			} else if (size == 2) {
+				add = 'w';
+			} else if (size == 4) {
+				add = 'd';
+			}
+
+			if (size < 8) {
+				vect_push(&out, &add);
+			}
+			break;
+	}
 
 	return out.data;
-}
-
-char *_op_get_location(Variable *var, int location) {
-	Vector out = vect_init(sizeof(char));
-	if(location < 0) {
-	} else if (location == 0) {
-	} else {
-	}
 }
 
 int _var_size(Variable *var) {
@@ -736,12 +789,35 @@ int _var_size(Variable *var) {
 	return var->type->size;
 }
 
+// Pure size in the sense that references count as pointers,
+// so returns 8 if reference, pointer, or array.
 int _var_pure_size(Variable *var) {
 	if ( var->ptr_chain.count > 0 ) {
 		return 8;
 	}
 
 	return var->type->size;
+}
+
+// Gets the location of a variable. Can not get the location
+// properly if the variable is a reference.
+char *_op_get_location(Variable *var) {
+	char *out = NULL;
+	
+	if(var->location < 0) {
+		// Invert because stack grows down (and stack index starts at 1)
+		out = _gen_address("", "rsp", "", 0, -(var->location + 1));
+	} else if (var->location == 0) {
+		// Stored in data sec
+		out = _gen_address("", var->name, "", 0, 0);
+	} else {
+		// Stored in register.  Our job here is not to assume
+		// what it will be used for (in the case it is a reference)
+		// so we use pure size
+		out = _op_get_register(var->location, _var_pure_size(var));
+	}
+
+	return out;
 }
 
 void var_swap_register(CompData *out, Variable *swap, int new_reg) {
@@ -756,27 +832,17 @@ void var_swap_register(CompData *out, Variable *swap, int new_reg) {
 // Store is copied from "from" variable, so it should be empty (will not be freed).
 void var_op_dereference(CompData *out, Variable *store, Variable *from) {
 	*store = var_copy(from);
-	if(from->ptr_chain.count < 1) {
-		printf("WARNING: var_op_dereference called on variable which is not a pointer type!");
+	if(from->ptr_chain.count < 1 || _var_ptr_type(from) != PTYPE_REF) {
+		printf("WARNING: var_op_dereference called on variable which is not a reference!");
 		return;
 	}
 
 	// Generate initial move (from -> rsi)
 	vect_push_string(&out->text, "\tmov rsi, ");
-	char *addr;
+	if (from->location < 1)
+		vect_push_string(&out->text, PREFIXES[7]);
+	char *addr = _op_get_location(from);
 	
-	if(from->location < 1) {
-		// It's from an address on stack or in data section
-		if(from->location < 0) {
-			addr = _gen_address("qword ", "rsp", "", 0, from->location);
-		} else {
-			addr = _gen_address("qword ", from->name, "", 0, 0);
-		}
-	} else {
-		// It's from a register
-		addr = _op_get_register(from->location, 8);
-	}
-
 	vect_push_string(&out->text, addr);
 	free(addr);
 	vect_push_string(&out->text, "; Move for dereference\n");
@@ -802,7 +868,51 @@ void var_op_index(CompData *out, Variable *store, Variable *from, Variable *inde
 	
 }
 
-void var_op_set(CompData *out, Variable *store, Variable *from) {}
+void var_op_set(CompData *out, Variable *store, Variable *from) {
+	if (_var_pure_size(from) != _var_pure_size(store)) {
+		printf("ERROR: Can't set one variable to the other as their pure sizes are different!\n");
+	}
+
+	char *tmp = NULL;
+	// Setting a struct.
+	if ( _var_pure_size(from) > 8 ) {
+		// Pure struct move
+		vect_push_string(&out->text, "\tlea rsi, ");
+		vect_push_free_string(&out->text, tmp);
+		vect_push_string(&out->text, "\n");
+
+		vect_push_string(&out->text, "\tlea rdi, ");
+		vect_push_free_string(&out->text, _op_get_location(store));
+		vect_push_string(&out->text, "\n");
+
+		vect_push_string(&out->text, "\tmov rcx, ");
+		vect_push_free_string(&out->text, int_to_str(_var_pure_size(from)));
+		vect_push_string(&out->text, "\n");
+		
+		vect_push_string(&out->text, "\tmovsb ; Move struct complete\n\n");
+	} else if (from->location < 1 && store->location < 1) {
+		// Both in memory, use rsi as temp storage for move
+		vect_push_string(&out->text, "\tmov ");
+		vect_push_free_string(&out->text, _op_get_register(5, _var_pure_size(from)));
+		vect_push_string(&out->text, ", ");
+		vect_push_free_string(&out->text, _op_get_location(from));
+		vect_push_string(&out->text, "\n");
+
+		vect_push_string(&out->text, "\tmov ");
+		vect_push_free_string(&out->text, _op_get_location(store));
+		vect_push_string(&out->text, ", ");
+		vect_push_free_string(&out->text, _op_get_register(5, _var_pure_size(from)));
+		vect_push_string(&out->text, " ; Memory swap complete\n\n");
+
+	} else {
+		// Register to register
+		vect_push_string(&out->text, "\tmov ");
+		vect_push_free_string(&out->text, _op_get_location(store));
+		vect_push_string(&out->text, ", ");
+		vect_push_free_string(&out->text, _op_get_location(from));
+		vect_push_string(&out->text, "; Register move\n\n");
+	}
+}
 
 void var_op_reference(CompData *out, Variable *store, Variable *from) {
 	if(from->ptr_chain.count > 0 && _var_ptr_type(from) == PTYPE_REF) {
