@@ -705,16 +705,23 @@ char *_op_get_location(Variable *var) {
 	return out;
 }
 
+// Can only be used on variables contained in a register.
 void var_swap_register(CompData *out, Variable *swap, int new_reg) {
-	if(swap->location == new_reg)
+	if(swap->location == new_reg || swap->location < 1)
 		return;
-	
-
-
+	vect_push_string(&out->text, "\tmov ");
+	vect_push_free_string(&out->text, _op_get_register(new_reg, _var_pure_size(swap)));
+	vect_push_string(&out->text, ", ");
+	vect_push_free_string(&out->text, _op_get_register(swap->location, _var_pure_size(swap)));
+	vect_push_string(&out->text, " ; Register swap\n\n");
+	swap->location = new_reg;
 }
 
 // Dereference a pointer variable into a new variable "store".
 // Store is copied from "from" variable, so it should be empty (will not be freed).
+// In other words, it takes a pointer variable and turns it into a reference,
+// which can be used in other var operations like member variables, struct moving,
+// or value setting.
 void var_op_dereference(CompData *out, Variable *store, Variable *from) {
 	*store = var_copy(from);
 	if(from->ptr_chain.count < 1 || _var_ptr_type(from) != PTYPE_REF) {
@@ -751,7 +758,11 @@ void var_op_index(CompData *out, Variable *store, Variable *from, Variable *inde
 	
 }
 
-void var_op_set(CompData *out, Variable *store, Variable *from) {
+// Pure set simply copies data from one source to another, disregarding
+// pointer arithmatic.  Should not be used to set the value of data reference variables
+// point to, but can be used to directly set the location that reference
+// variables point to for things like function parameter passing.
+void var_op_pure_set(CompData *out, Variable *store, Variable *from) {
 	if (_var_pure_size(from) != _var_pure_size(store)) {
 		printf("ERROR: Can't set one variable to the other as their pure sizes are different!\n");
 	}
@@ -797,10 +808,19 @@ void var_op_set(CompData *out, Variable *store, Variable *from) {
 	}
 }
 
+// Tries it's best to coerce the data from "from" into a format
+// which will be accepted by "store", following refences in the process.
+// This is similar to a normal move operation.
+void var_op_set(CompData *out, Variable *store, Variable *from) {
+	
+}
+
+// Take a variable on the stack or in data section, and load a reference
+// to it's location in memory
 void var_op_reference(CompData *out, Variable *store, Variable *from) {
 	if(from->ptr_chain.count > 0 && _var_ptr_type(from) == PTYPE_REF) {
 		// The value is a reference to data, so we should just copy it
-		var_op_set(out, store, from);
+		var_op_pure_set(out, store, from);
 		return;
 	}
 
@@ -810,7 +830,31 @@ void var_op_reference(CompData *out, Variable *store, Variable *from) {
 		return;
 	}
 
+	vect_push_string(&out->text, "\tlea ");
+	if(store->location < 1) {
+		// Store is on stack or in data sec, so we need to
+		// copy into a tmp register first (we use rsi by convention)
+		vect_push_free_string(&out->text, _op_get_register(5, _var_pure_size(store)));
+	} else {
+		// Since store is in a register we can directly lea
+		vect_push_free_string(&out->text, _op_get_register(store->location, _var_pure_size(store)));
+	}
 
+	vect_push_string(&out->text, ", ");
+	vect_push_free_string(&out->text, _op_get_location(from));
+	vect_push_string(&out->text, " ; Generate reference\n");
+
+	if(store->location < 1) {
+		// If we stored in a tmp register, we need to complete
+		// the move
+		vect_push_string(&out->text, "\tmov ");
+		vect_push_free_string(&out->text, _op_get_location(store));
+		vect_push_string(&out->text, ", ");
+		vect_push_free_string(&out->text, _op_get_register(5, _var_pure_size(store)));
+		vect_push_string(&out->text, " ; Move ref from tmp register to final location\n");
+	}
+
+	vect_push_string(&out->text, "\n");
 }
 
 Variable var_op_member(Variable *from, char *member) {
