@@ -910,12 +910,92 @@ void var_op_pure_set(CompData *out, Variable *store, Variable *from) {
 	}
 }
 
+// Specific setting rules for pointers
+void _var_op_set_ptr(CompData *out, Variable *store, Variable *from) {
+	// Pointer coercion should always work
+	char *mov_from;
+	char *mov_to;
+
+	// First deref from var, then deref store variable, then move.
+	if(_var_ptr_type(store) != PTYPE_REF) {
+		mov_to = _op_get_location(store);
+	} else {
+		// Need to deref
+		vect_push_string(&out->text, "\tmov rdi, ");
+		vect_push_free_string(&out->text, _op_get_location(store));
+		vect_push_string(&out->text, " ; Move for ptr set dest deref\n");
+
+		int *cur;
+		for (size_t i = store->ptr_chain.count - 1; i > 0; i--) {
+			cur = vect_get(&store->ptr_chain, i - 1);
+			if (cur == PTYPE_REF) {
+				vect_push_string(&out->text, "\tmov rdi, [rdi]\n");
+			} else {
+				break;
+			}
+		}
+		mov_to = _gen_address("", "rdi", "", 0, 0);
+	}
+
+	if (_var_ptr_type(from) != PTYPE_REF) {
+		if (from->location > 0 || (_var_ptr_type(store) != PTYPE_REF && store->location > 0)) {
+			mov_from = _op_get_location(from);
+		} else {
+			vect_push_string(&out->text, "\tmov rsi, ");
+			vect_push_free_string(&out->text, _op_get_location(from));
+			vect_push_string(&out->text, " ; Move for ptr set\n");
+			mov_from = _op_get_register(5, 8);
+		}
+	} else {
+		// Need to deref
+		vect_push_string(&out->text, "\tmov rsi, ");
+		vect_push_free_string(&out->text, _op_get_location(from));
+		vect_push_string(&out->text, " ; Move for ptr set source deref\n");
+		
+		int *cur;
+		for (size_t i = from->ptr_chain.count - 1; i > 0; i--) {
+			cur = vect_get(&store->ptr_chain, i - 1);
+			if (cur == PTYPE_REF) {
+				vect_push_string(&out->text, "\tmov rsi, [rsi]\n");
+			} else {
+				break;
+			}
+		}
+
+		switch (_var_pure_size(from)) {
+		case 1:
+			vect_push_string(&out->text, "\tmovzx rsi, byte [rsi]\n");
+			break;
+		case 2:
+			vect_push_string(&out->text, "\tmovzx rsi, word [rsi]\n");
+			break;
+		case 4:
+			vect_push_string(&out->text, "\tmov esi, dword [rsi]\n");
+			break;
+		case 8:
+			vect_push_string(&out->text, "\tmov rsi, [rsi]\n");
+			break;
+		}
+
+		mov_from = _op_get_register(5, 8);
+	}
+
+	vect_push_string(&out->text, "\tmov ");
+	vect_push_free_string(&out->text, mov_to);
+	vect_push_string(&out->text, ", ");
+	vect_push_free_string(&out->text, mov_from);
+	vect_push_string(&out->text, " ; Ptr set final\n\n");
+	
+	return;
+}
+
 // Tries it's best to coerce the data from "from" into a format
 // which will be accepted by "store", following refences in the process.
 // This is similar to a normal move operation.
 void var_op_set(CompData *out, Variable *store, Variable *from) {
-	if(_var_ptr_type(store) != PTYPE_REF) {
-		// Pointer coercion will always work
+	if(_var_first_nonref(store) == PTYPE_PTR || _var_first_nonref(store) == PTYPE_ARR) {
+		_var_op_set_ptr(out, store, from);
+		return;
 	}
 
 	if(is_inbuilt(store->type->name) != is_inbuilt(from->type->name)) {
