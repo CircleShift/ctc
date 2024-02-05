@@ -431,17 +431,17 @@ Type TYP_INBUILT[] = {
 	{"uint16", 2, {0}, NULL},
 	{"uint32", 4, {0}, NULL},
 	{"uint64", 8, {0}, NULL},
-	{"uint", 8, {0}, NULL}, // Platform max uint
+	{"uint", 8, {0}, NULL},      // Platform max uint
 	{"int8", 1, {0}, NULL},
 	{"int16", 2, {0}, NULL},
 	{"int32", 4, {0}, NULL},
 	{"int64", 8, {0}, NULL},
-	{"int", 8, {0}, NULL}, // Platform max int
+	{"int", 8, {0}, NULL},       // Platform max int
 	{"float32", 4, {0}, NULL},
 	{"float64", 8, {0}, NULL},
-	{"float", 8, {0}, NULL}, // Platform max float
+	{"float", 8, {0}, NULL},     // Platform max float
 	{"bool", 1, {0}, NULL},
-	{"void", 8, {0}, NULL},
+	{"void", 8, {0}, NULL},      // Untyped pointer
 };
 
 Type *typ_get_inbuilt(char *name) {
@@ -451,6 +451,15 @@ Type *typ_get_inbuilt(char *name) {
 		}
 	}
 	return NULL;
+}
+
+bool is_inbuilt(char *name) {
+	for (size_t i = 0; i < sizeof(TYP_INBUILT)/sizeof(Type); i++) {
+		if (strcmp(TYP_INBUILT[i].name, name) == 0) {
+			return true;
+		}
+	}
+	return false;
 }
 
 
@@ -706,7 +715,7 @@ char *_op_get_location(Variable *var) {
 }
 
 // Can only be used on variables contained in a register.
-void var_swap_register(CompData *out, Variable *swap, int new_reg) {
+void var_chg_register(CompData *out, Variable *swap, int new_reg) {
 	if(swap->location == new_reg || swap->location < 1)
 		return;
 	vect_push_string(&out->text, "\tmov ");
@@ -812,7 +821,8 @@ void var_op_pure_set(CompData *out, Variable *store, Variable *from) {
 // which will be accepted by "store", following refences in the process.
 // This is similar to a normal move operation.
 void var_op_set(CompData *out, Variable *store, Variable *from) {
-	
+	if() {
+	}
 }
 
 // Take a variable on the stack or in data section, and load a reference
@@ -2677,7 +2687,7 @@ Variable eval(Scope *s, CompData *out, Vector *tokens, size_t *pos, bool keep) {
 	if(keep && store.location <= 0) {
 		var_op_reference(out, &store, &store);
 	} else if(keep && store.location > 0) {
-		var_swap_register(out, &store, 1);
+		var_chg_register(out, &store, 1);
 	}
 	
 	return store;
