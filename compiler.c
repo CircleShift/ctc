@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <ctype.h>
+#include <strings.h>
 
 
 
@@ -575,6 +576,18 @@ int _var_ptr_type(Variable *v) {
 	return ((int*)v->ptr_chain.data)[v->ptr_chain.count - 1];
 }
 
+// Get the first non-reference value from ptr_chain
+int _var_first_nonref(Variable *v) {
+	int *chk;
+	for(size_t i = v->ptr_chain.count; i > 0; i--) {
+		chk = vect_get(&v->ptr_chain, i - 1);
+		if(*chk != PTYPE_REF) {
+			return *chk;
+		}
+	}
+	return -2;
+}
+
 // Valid registers to use in operations:
 // rax (1), rdx (4), rsi (5), rdi (6).  Other registers assumed to be used by
 // variables
@@ -738,13 +751,15 @@ void var_op_dereference(CompData *out, Variable *store, Variable *from) {
 		return;
 	}
 
-	// Generate initial move (from -> rsi)
-	vect_push_string(&out->text, "\tmov rsi, ");
-	if (from->location < 1)
-		vect_push_string(&out->text, PREFIXES[7]);
-	
-	vect_push_free_string(&out->text, _op_get_location(from));
-	vect_push_string(&out->text, "; Move for dereference\n");
+	if (from->location != 5) {
+		// Generate initial move (from -> rsi)
+		vect_push_string(&out->text, "\tmov rsi, ");
+		if (from->location < 1)
+			vect_push_string(&out->text, PREFIXES[7]);
+		
+		vect_push_free_string(&out->text, _op_get_location(from));
+		vect_push_string(&out->text, "; Move for dereference\n");
+	}
 
 	// Keep de-referencing until we reach the pointer (or ptr_chain bottoms out).
 	int *current = vect_get(&store->ptr_chain, store->ptr_chain.count - 1);
@@ -752,6 +767,7 @@ void var_op_dereference(CompData *out, Variable *store, Variable *from) {
 		vect_push_string(&out->text, "\tmov rsi, [rsi] ; Dereference\n");
 		vect_pop(&store->ptr_chain);
 	}
+	vect_push_string(&out->text, "\n");
 
 	// pointer type -> ref
 	int ref = PTYPE_REF;
@@ -764,7 +780,84 @@ void var_op_dereference(CompData *out, Variable *store, Variable *from) {
 // Index into an array by "index" elements.  Store the reference to the value in "store".
 // The "store" variable should be freed or empty before calling this function.
 void var_op_index(CompData *out, Variable *store, Variable *from, Variable *index) {
+	// Generate a reference to the data we will output.
+	// we will do pointer math on store based on ptype of from.
+	var_op_dereference(out, store, from);
+
 	
+	// First, we'll calculate where the index is coming from
+	char *idx_by = NULL;
+	if(_var_ptr_type(index) == PTYPE_REF) {
+		vect_push_string(&out->text, "\tmov rdx, ");
+		vect_push_string(&out->text, _op_get_location(index));
+		vect_push_string(&out->text, " ; !!! DEREF IN INDEX !!!\n");
+		
+		int *cur;
+		for(size_t i = index->ptr_chain.count - 1; i > 0; i--) {
+			cur = vect_get(&index->ptr_chain, i - 1);
+			if (*cur == PTYPE_REF) {
+				vect_push_string(&out->text, "\tmov rdx, [rdx] ; deref\n");
+			} else 
+				break;
+		}
+
+		idx_by = _gen_address(PREFIXES[_var_size(index) - 1], "rdx", "", 0, 0);
+
+	} else {
+		if (index->location < 1) {
+			Vector tmp = vect_from_string(PREFIXES[index->type->size - 1]);
+			vect_push_free_string(&tmp, _op_get_location(index));
+			idx_by = vect_as_string(&tmp);
+		} else {
+			idx_by = _op_get_register(index->location, _var_size(index));
+		}
+	}
+
+
+	// What type of move we will use on the index
+	// to get it into rax
+	switch(_var_size(index)) {
+	case 8:
+		// Standard move
+		vect_push_string(&out->text, "\tmov rax, ");
+		break;
+	case 4:
+		// mov into 4 byte register zeros out upper four bytes of the corrosponding 8 byte register
+		vect_push_string(&out->text, "\tmov eax, ");
+		break;
+	case 2:
+	case 1:
+		// Zero extension
+		vect_push_string(&out->text, "\tmovzx rax, ");
+		break;
+	default:
+		vect_push_string(&out->text, "\tmov rax, ");
+	}
+
+	// Get index into rax
+	vect_push_free_string(&out->text, idx_by);
+	vect_push_string(&out->text, " ; Pre-index\n");
+	
+	if(_var_size(from) > 1) {
+		// To multiply by the var size, we load the var size into rdx, then
+		// multiply by it.
+		vect_push_string(&out->text, "\tmov rdx, ");
+		vect_push_free_string(&out->text, int_to_str(_var_size(from)));
+		vect_push_string(&out->text, " ; Size of element held by ptr (pre-index)\n");
+		
+		vect_push_string(&out->text, "\tmul rdx ; Index multiplication by data size\n");
+	}
+
+	vect_push_string(&out->text, "\tlea rsi, ");
+	if (_var_first_nonref(from) == PTYPE_PTR) {
+		vect_push_free_string(&out->text, _gen_address("", "rsi", "rax", 1, 0));
+	} else if (_var_first_nonref(from) == PTYPE_ARR) {
+		// Additional offset due to arrays containing a length at the start
+		vect_push_free_string(&out->text, _gen_address("", "rsi", "rax", 1, 8));
+	} else {
+		vect_push_string(&out->text, "rsi ; COMPILER ERROR!");
+	}
+	vect_push_string(&out->text, " ; Index complete.\n\n");
 }
 
 // Pure set simply copies data from one source to another, disregarding
@@ -821,7 +914,23 @@ void var_op_pure_set(CompData *out, Variable *store, Variable *from) {
 // which will be accepted by "store", following refences in the process.
 // This is similar to a normal move operation.
 void var_op_set(CompData *out, Variable *store, Variable *from) {
-	if() {
+	if(_var_ptr_type(store) != PTYPE_REF) {
+		// Pointer coercion will always work
+	}
+
+	if(is_inbuilt(store->type->name) != is_inbuilt(from->type->name)) {
+		printf("ERROR: Unable to coerce types when one is inbuilt and the other is not.\n\n");
+		return;
+	}
+
+	if(is_inbuilt(from->type->name)) {
+		// Inbuilt types like int, uint, void, etc.
+		
+	} else {
+		// Two structs, we should only copy as much data as we can from one to another,
+		// and so will defer to the storage variable for how much to transfer
+		
+		//
 	}
 }
 
@@ -872,8 +981,33 @@ Variable var_op_member(Variable *from, char *member) {
 	return out;
 }
 
-void var_op_add(CompData *out, Variable *base, Variable *add) {}
-void var_op_sub(CompData *out, Variable *base, Variable *sub) {}
+// Adds "base" with "add" and sets "base" to the result
+void var_op_add(CompData *out, Variable *base, Variable *add) {
+
+}
+
+// Subtracts "sub" from "base" and sets "base" to the result
+void var_op_sub(CompData *out, Variable *base, Variable *sub) {
+
+}
+
+// Multiplies "base" by "mul" and sets "base" to the result.
+void var_op_mul(CompData *out, Variable *base, Variable *mul) {
+
+}
+
+// Divides "base" by "div" and sets "base" to the result
+void var_op_div(CompData *out, Variable *base, Variable *div) {
+	// zero out rdx before divide
+	vect_push_string(&out->text, "\txor rdx, rdx ; Clear rdx for divide\n");
+}
+
+// Divides "base" by "mod" and sets "base" to the remainder
+void var_op_mod(CompData *out, Variable *base, Variable *mod) {
+	// zero out rdx before divide
+	vect_push_string(&out->text, "\txor rdx, rdx ; Clear rdx for divide\n");
+}
+
 
 
 // Functions
