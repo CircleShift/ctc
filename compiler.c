@@ -962,7 +962,7 @@ void _var_op_set_ptr(CompData *out, Variable *store, Variable *from) {
 			}
 		}
 
-		switch (_var_pure_size(from)) {
+		switch (_var_size(from)) {
 		case 1:
 			vect_push_string(&out->text, "\tmovzx rsi, byte [rsi]\n");
 			break;
