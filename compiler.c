@@ -155,10 +155,11 @@ Vector vect_from_string(char *s) {
 }
 
 // Returns the vector data as a null-terminated string
-// do NOT free this pointer. Not safe to use this string
-// at the same time as you are adding or removing from the
-// vector. Instead consider cloning the vector if you must
-// have both, or want an independant copy of the string.
+// do NOT free this pointer unless you discard the vector.
+// Not safe to use this string at the same time as you are
+// adding or removing from the vector. Consider cloning the
+// vector if you must have both, or want an independant copy
+// of the string.
 char *vect_as_string(Vector *v) {
 	((char*)v->data)[v->count * v->_el_sz] = 0;
 	return v->data;
@@ -770,9 +771,8 @@ void var_op_dereference(CompData *out, Variable *store, Variable *from) {
 	vect_push_string(&out->text, "\n");
 
 	// pointer type -> ref
-	int ref = PTYPE_REF;
 	current = vect_get(&store->ptr_chain, store->ptr_chain.count - 1);
-	*current = ref;
+	*current = PTYPE_REF;
 	// Location -> rsi (5)
 	store->location = 5;
 }
@@ -1002,6 +1002,9 @@ void var_op_set(CompData *out, Variable *store, Variable *from) {
 		printf("ERROR: Unable to coerce types when one is inbuilt and the other is not.\n\n");
 		return;
 	}
+	
+	char *mov_from;
+	char *mov_to;
 
 	if(is_inbuilt(from->type->name)) {
 		// Inbuilt types like int, uint, void, etc.
@@ -1010,7 +1013,58 @@ void var_op_set(CompData *out, Variable *store, Variable *from) {
 		// Two structs, we should only copy as much data as we can from one to another,
 		// and so will defer to the storage variable for how much to transfer
 		
-		//
+		// since we will be using movsb, we first should mov the from struct into
+		// rsi.
+		if (from->location < 1) {
+			vect_push_string(&out->text, "\tlea rsi, ");
+		} else {
+			vect_push_string(&out->text, "\tmov rsi, ");
+		}
+		vect_push_free_string(&out->text, _op_get_location(from));
+		vect_push_string(&out->text, " ; Initial mov to rsi\n");
+		
+		// Handle the case where the from struct is a reference
+		size_t i = from->ptr_chain.count;
+		if (from->location > 0)
+			i--;
+
+		for (; i > 0; i--) {
+			int *cur = vect_get(&from->ptr_chain, i - 1);
+			if (*cur == PTYPE_REF)
+				vect_push_string(&out->text, "\tlea rsi, [rsi] ; Deref\n");
+			else
+				break;
+		}
+
+		// load the location of the storeage var into rdi
+		if (store->location < 1) {
+			vect_push_string(&out->text, "\tlea rdi, ");
+		} else {
+			vect_push_string(&out->text, "\tmov rdi, ");
+		}
+		vect_push_free_string(&out->text, _op_get_location(store));
+		vect_push_string(&out->text, " ; Initial mov to rdi\n");
+
+		i = store->ptr_chain.count;
+		if (store->location > 0)
+			i--;
+
+		for (; i > 0; i--) {
+			int *cur = vect_get(&store->ptr_chain, i - 1);
+			if (*cur == PTYPE_REF)
+				vect_push_string(&out->text, "\tlea rsi, [rsi] ; Deref\n");
+			else
+				break;
+		}
+
+		// We can move up to the minimum number of bytes btwn the two structs
+		vect_push_string(&out->text, "\tmov rcx, ");
+		if (_var_size(from) < _var_size(store)) {
+			vect_push_free_string(&out->text, int_to_str(_var_size(from)));
+		} else {
+			vect_push_free_string(&out->text, int_to_str(_var_size(store)));
+		}
+		vect_push_string(&out->text, "\n\tmovsb ; Complete struct move\n\n");
 	}
 }
 
