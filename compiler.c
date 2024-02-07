@@ -910,6 +910,7 @@ void var_op_pure_set(CompData *out, Variable *store, Variable *from) {
 	}
 }
 
+
 // Specific setting rules for pointers
 void _var_op_set_ptr(CompData *out, Variable *store, Variable *from) {
 	// Pointer coercion should always work
@@ -989,6 +990,76 @@ void _var_op_set_ptr(CompData *out, Variable *store, Variable *from) {
 	return;
 }
 
+// Common func to move one variable to another in the case of two
+// inbuilts
+void _var_op_set_inbuilt(CompData *out, Variable *store, Variable *from) {
+	char *mov_from;
+	char *mov_to;
+	
+	// Cases for source/dest:
+	// register
+	// stack
+	// data
+	// reference
+	
+	// Cases for types
+	// uint - range from 1 to 8 bytes - zx expansion
+	// int - range from 1 to 8 bytes - sx expansion
+	// bool - always 1 byte
+	// float - not impl
+	// void - should only be used to represent ptrs, so we should not see it here.
+	
+	// In case of references
+	if (_var_ptr_type(store) == PTYPE_REF){
+		vect_push_string(&out->text, "\tmov rdi, ");
+		vect_push_free_string(&out->text, _op_get_location(store));
+		vect_push_string(&out->text, " ; pre-deref for inbuilt mov\n");
+
+		for(size_t i = store->ptr_chain.count - 1; i > 0; i--){
+			int *cur = vect_get(&store->ptr_chain, i);
+			if (cur == PTYPE_REF) {
+				vect_push_string(&out->text, "\tmov rsi, [rsi] ; deref for mov\n");
+			} else
+				break; // Should not happen
+		}
+
+		mov_to = _gen_address(PREFIXES[_var_size(store) - 1], "rdi", "", 0, 0);
+	} else if (store->location == 0) {
+		mov_to = _gen_address(PREFIXES[_var_size(store) - 1], store->name, "", 0, 0);
+	} else if (store->location < 0) {
+		mov_to = _gen_address(PREFIXES[_var_size(store) - 1], "rsp", "", 0, -(store->location + 1));
+	} else {
+		mov_to = _op_get_location(store);
+	}
+
+	// TODO: Get mov_from for this func
+
+
+	// Match sign of data if required.
+	if (_var_size(from) < _var_size(store)) {
+		if(from->type->name[0] == 'i' && store->type->name[0] == 'i') {
+			if (_var_size(from) < 4)
+				vect_push_string(&out->text, "\tmovsx rsi, ");
+			else
+				vect_push_string(&out->text, "\tmovsxd rsi, ");
+		} else {
+			if(_var_size(from) < 4)
+				vect_push_string(&out->text, "\tmovzx rsi, ");
+			else
+				vect_push_string(&out->text, "\tmovzxd rsi, ");
+		}
+		vect_push_free_string(&out->text, mov_from);
+		vect_push_string(&out->text, " ; Sign extension for mov\n");
+		mov_from = _op_get_register(5, _var_size(store));
+	}
+
+	vect_push_string(&out->text, "\tmov ");
+	vect_push_free_string(&out->text, mov_to);
+	vect_push_string(&out->text, ", ");
+	vect_push_free_string(&out->text, mov_from);
+	vect_push_string(&out->text, " ; Finish mov_inbuilt\n\n");
+}
+
 // Tries it's best to coerce the data from "from" into a format
 // which will be accepted by "store", following refences in the process.
 // This is similar to a normal move operation.
@@ -1003,12 +1074,9 @@ void var_op_set(CompData *out, Variable *store, Variable *from) {
 		return;
 	}
 	
-	char *mov_from;
-	char *mov_to;
-
 	if(is_inbuilt(from->type->name)) {
 		// Inbuilt types like int, uint, void, etc.
-		
+		_var_op_set_inbuilt(out, store, from);
 	} else {
 		// Two structs, we should only copy as much data as we can from one to another,
 		// and so will defer to the storage variable for how much to transfer
@@ -1127,7 +1195,11 @@ void var_op_sub(CompData *out, Variable *base, Variable *sub) {
 
 // Multiplies "base" by "mul" and sets "base" to the result.
 void var_op_mul(CompData *out, Variable *base, Variable *mul) {
-
+	if(base->type->name[0] == 'i') {
+		// Integer multiplication
+	} else {
+		vect_push_string(&out->text, "\tmul ");
+	}
 }
 
 // Divides "base" by "div" and sets "base" to the result
