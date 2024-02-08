@@ -1013,12 +1013,12 @@ void _var_op_set_inbuilt(CompData *out, Variable *store, Variable *from) {
 	if (_var_ptr_type(store) == PTYPE_REF){
 		vect_push_string(&out->text, "\tmov rdi, ");
 		vect_push_free_string(&out->text, _op_get_location(store));
-		vect_push_string(&out->text, " ; pre-deref for inbuilt mov\n");
+		vect_push_string(&out->text, " ; pre-deref for inbuilt mov (store)\n");
 
 		for(size_t i = store->ptr_chain.count - 1; i > 0; i--){
 			int *cur = vect_get(&store->ptr_chain, i);
 			if (cur == PTYPE_REF) {
-				vect_push_string(&out->text, "\tmov rsi, [rsi] ; deref for mov\n");
+				vect_push_string(&out->text, "\tmov rdi, [rdi] ; deref for mov\n");
 			} else
 				break; // Should not happen
 		}
@@ -1033,10 +1033,49 @@ void _var_op_set_inbuilt(CompData *out, Variable *store, Variable *from) {
 	}
 
 	// TODO: Get mov_from for this func
+	if (_var_ptr_type(from) == PTYPE_REF) {
+		vect_push_string(&out->text, "\tmov rsi, ");
+		vect_push_free_string(&out->text, _op_get_location(from));
+		vect_push_string(&out->text, " ; pre-deref for inbuilt mov (from)\n");
 
+		for(size_t i = store->ptr_chain.count - 1; i > 0; i--){
+			int *cur = vect_get(&store->ptr_chain, i);
+			if (cur == PTYPE_REF) {
+				vect_push_string(&out->text, "\tmov rsi, [rsi] ; deref for mov\n");
+			} else
+				break; // Should not happen
+		}
+		// Final deref (store actual value in rsi)
+		vect_push_string(&out->text, "\tmov ");
+		vect_push_free_string(&out->text, _op_get_register(5, _var_size(from)));
+		vect_push_string(&out->text, ", ");
+		vect_push_string(&out->text, PREFIXES[_var_size(from)]);
+		vect_push_string(&out->text, "[rsi] ; pre-deref for inbuilt mov (from)\n");
+
+		mov_from = _op_get_register(5, _var_size(from));
+		
+	} else if (from->location > 0) {
+		mov_from = _op_get_register(from->location, _var_size(from));
+
+	} else if (store->location < 1 || _var_ptr_type(store) == PTYPE_REF) {
+		vect_push_string(&out->text, "\tmov ");
+		vect_push_free_string(&out->text, _op_get_register(5, _var_size(from)));
+		vect_push_string(&out->text, ", ");
+		vect_push_string(&out->text, _op_get_location(from));
+		vect_push_string(&out->text, " ; pre-load for mov (from)\n");
+
+		mov_from = _op_get_register(5, _var_size(from));
+	} else if (from->location == 0) {
+		// from in data sec
+		mov_from = _gen_address(PREFIXES[_var_size(from) - 1], from->name, "", 0, 0);
+	} else {
+		// from on stack
+		mov_from = _gen_address(PREFIXES[_var_size(from) - 1], "rsp", "", 0, -(from->location + 1));
+	}
 
 	// Match sign of data if required.
 	if (_var_size(from) < _var_size(store)) {
+		// Store larger than from (extend sign)
 		if(from->type->name[0] == 'i' && store->type->name[0] == 'i') {
 			if (_var_size(from) < 4)
 				vect_push_string(&out->text, "\tmovsx rsi, ");
@@ -1051,6 +1090,13 @@ void _var_op_set_inbuilt(CompData *out, Variable *store, Variable *from) {
 		vect_push_free_string(&out->text, mov_from);
 		vect_push_string(&out->text, " ; Sign extension for mov\n");
 		mov_from = _op_get_register(5, _var_size(store));
+	} else if (_var_size(from) > _var_size(store)) {
+		// Store smaller than from (recompute mov_from)
+		if (_var_ptr_type(from) == PTYPE_REF) {
+		} else if (from->location > 0) {
+			free(mov_from);
+			mov_from = _op_get_register(from->location, _var_size(store));
+		}
 	}
 
 	vect_push_string(&out->text, "\tmov ");
