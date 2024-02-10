@@ -382,7 +382,8 @@ typedef struct {
 	char *name;
 	Type *type;
 	Vector ptr_chain;
-	int location; // negative for on stack, zero for in data section, positive for in register
+	int location; // negative one for on stack, negative two for literal, zero for in data section, positive for in register
+	int offset;   // offset for member variables (if this is a literal, it represents the actual value)
 } Variable;
 
 #define PTYPE_PTR -1
@@ -477,6 +478,7 @@ Variable var_init(char *name, Type *type) {
 	out.type = type;
 	out.ptr_chain = vect_init(sizeof(int));
 	out.location = 0;
+	out.offset = 0;
 
 	return out;
 }
@@ -485,6 +487,7 @@ Variable var_copy(Variable *to_copy) {
 	Variable out = var_init(to_copy->name, to_copy->type);
 
 	out.location = to_copy->location;
+	out.offset = to_copy->offset;
 
 	for (size_t i = 0; i < to_copy->ptr_chain.count; i++) {
 		int *ptr_orig = vect_get(&(to_copy->ptr_chain), i);
@@ -712,12 +715,14 @@ int _var_pure_size(Variable *var) {
 char *_op_get_location(Variable *var) {
 	char *out = NULL;
 	
-	if(var->location < 0) {
+	if (var->location == -2) {
+		out = int_to_str(var->offset);
+	} else if(var->location == -1) {
 		// Invert because stack grows down (and stack index starts at 1)
-		out = _gen_address("", "rsp", "", 0, -(var->location + 1));
+		out = _gen_address("", "rsp", "", 0, var->offset);
 	} else if (var->location == 0) {
 		// Stored in data sec
-		out = _gen_address("", var->name, "", 0, 0);
+		out = _gen_address("", var->name, "", 0, var->offset);
 	} else {
 		// Stored in register.  Our job here is not to assume
 		// what it will be used for (in the case it is a reference)
@@ -1225,7 +1230,37 @@ void var_op_reference(CompData *out, Variable *store, Variable *from) {
 }
 
 Variable var_op_member(Variable *from, char *member) {
-	Variable out = var_copy(from);
+	Variable out = {0};
+	out.name = NULL; // This is how you can check weather we succeeded
+
+	for (size_t i = 0; i < from->type->members.count; i++) {
+		Variable *mem = vect_get(&from->type->members, i);
+		if (strcmp(mem->name, member) == 0) {
+			out = var_copy(mem);
+			break;
+		}
+	}
+
+	// Copy ptr_chain so when using the variable we follow all references
+	for(size_t i = 0; i < from->ptr_chain.count; i++) {
+		int *cur = vect_get(&from->ptr_chain, i);
+		vect_push(&out.ptr_chain, cur);
+	}
+	
+	// Copy location
+	out.location = from->location;
+	
+	// If the variable is in the data section, we should copy
+	// the name as well so references are properly handled
+	if(out.location == 0) {
+		free(out.name);
+		Vector name = vect_from_string(from->name);
+		out.name = vect_as_string(&name);
+	}
+
+	// If from is already offset, we should base our new offset on the old one.
+	out.offset += from->offset;
+
 	return out;
 }
 
@@ -1908,6 +1943,7 @@ Variable tnsl_parse_type(Vector *tokens, size_t cur) {
 	Variable err = {0};
 	err.name = NULL;
 	err.location = -1;
+	err.offset = 0;
 	err.type = NULL;
 
 	int add = 0;
@@ -1937,6 +1973,8 @@ Variable tnsl_parse_type(Vector *tokens, size_t cur) {
 				if (t->type == TT_DELIMIT && tok_str_eq(t, "}")) {
 					add = PTYPE_ARR;
 				} else if (t->type == TT_LITERAL && t->data[0] >= '0' && t->data[0] <= '9') {
+					// This functionality is not well implemented yet, but it is supposed to
+					// represent a fixed-size array
 					add = tnsl_parse_number(t);
 					vect_push(&ptr, &add);
 					cur++;
@@ -1960,7 +1998,9 @@ Variable tnsl_parse_type(Vector *tokens, size_t cur) {
 		}
 	}
 
-	// ftn loop
+	// Get the full type name (ftn)
+	// includes the parent module names if
+	// dot delineation is used.
 	Token *t = vect_get(tokens, cur);
 	if(t == NULL) {
 		vect_end(&ftn);
@@ -3120,11 +3160,34 @@ void _p2_handle_method_scope(Module *root, CompData *out, Scope *fs) {
 }
 
 void _p2_func_scope_init(Module *root, CompData *out, Scope *fs) {
-
+	// TODO: decide what happens when a function scope is created
+	
+	// Update stack pointers
+	vect_push(&out->text, "push rbp");
+	vect_push(&out->text, "lea rbp, [rsp + 8]");
+	
+	
+	// Push registers to save callee variables (subject to ABI change)
+	vect_push(&out->text, "push r8");
+	vect_push(&out->text, "push r9");
+	vect_push(&out->text, "push r10");
+	vect_push(&out->text, "push r11");
+	vect_push(&out->text, "push r12");
+	vect_push(&out->text, "push r13");
+	vect_push(&out->text, "push r14");
+	vect_push(&out->text, "push r15");
 }
 
 void _p2_func_scope_end(CompData *out, Scope *fs) {
-
+	// TODO: Revert state of system to what it was before the function was called
+	vect_push(&out->text, "pop r15");
+	vect_push(&out->text, "pop r14");
+	vect_push(&out->text, "pop r13");
+	vect_push(&out->text, "pop r12");
+	vect_push(&out->text, "pop r11");
+	vect_push(&out->text, "pop r10");
+	vect_push(&out->text, "pop r9");
+	vect_push(&out->text, "pop r8");
 }
 
 void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *pos) {
