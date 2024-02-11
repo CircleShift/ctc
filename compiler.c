@@ -815,7 +815,9 @@ void var_op_index(CompData *out, Variable *store, Variable *from, Variable *inde
 	
 	// First, we'll calculate where the index is coming from
 	char *idx_by = NULL;
-	if(_var_ptr_type(index) == PTYPE_REF) {
+	if (index->location == LOC_LITL) {
+		idx_by = int_to_str(index->offset);
+	} else if(_var_ptr_type(index) == PTYPE_REF) {
 		vect_push_string(&out->text, "\tmov rdx, ");
 		vect_push_string(&out->text, _op_get_location(index));
 		vect_push_string(&out->text, " ; !!! DEREF IN INDEX !!!\n");
@@ -832,9 +834,7 @@ void var_op_index(CompData *out, Variable *store, Variable *from, Variable *inde
 		idx_by = _gen_address(PREFIXES[_var_size(index) - 1], "rdx", "", 0, 0);
 
 	} else {
-		if (index->location == LOC_LITL) {
-			idx_by = int_to_str(index->offset);
-		} if (index->location == LOC_STCK || index->location == LOC_DATA) {
+		if (index->location == LOC_STCK || index->location == LOC_DATA) {
 			Vector tmp = vect_from_string(PREFIXES[index->type->size - 1]);
 			vect_push_free_string(&tmp, _op_get_location(index));
 			idx_by = vect_as_string(&tmp);
@@ -895,13 +895,27 @@ void var_op_index(CompData *out, Variable *store, Variable *from, Variable *inde
 // point to, but can be used to directly set the location that reference
 // variables point to for things like function parameter passing.
 void var_op_pure_set(CompData *out, Variable *store, Variable *from) {
-	if (_var_pure_size(from) != _var_pure_size(store)) {
+	if (store->location == LOC_LITL) {
+		printf("ERROR: Can't set a literal value by pure set.\n");
+		return;
+	} else if (_var_pure_size(from) != _var_pure_size(store)) {
 		printf("ERROR: Can't set one variable to the other as their pure sizes are different!\n");
+		return;
 	}
 
 	char *tmp = NULL;
 	// Setting a struct.
-	if ( _var_pure_size(from) > 8 ) {
+	if (from->location == LOC_LITL) {
+		vect_push_string(&out->text, "\tmov ");
+		if (store->location < 1) {
+			vect_push_string(&out->text, PREFIXES[_var_pure_size(store) - 1]);
+		}
+		vect_push_free_string(&out->text, _op_get_location(store));
+		vect_push_string(&out->text, ", ");
+		vect_push_free_string(&out->text, _op_get_location(from));
+		vect_push_string(&out->text, "; literal move\n\n");
+		
+	} if ( !is_inbuilt(from->type) ) {
 		// Pure struct move
 		vect_push_string(&out->text, "\tlea rsi, ");
 		vect_push_free_string(&out->text, tmp);
