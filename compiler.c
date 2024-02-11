@@ -386,6 +386,10 @@ typedef struct {
 	int offset;   // offset for member variables (if this is a literal, it represents the actual value)
 } Variable;
 
+#define LOC_LITL -2
+#define LOC_STCK -1
+#define LOC_DATA 0
+
 #define PTYPE_PTR -1
 #define PTYPE_REF 0
 #define PTYPE_ARR 1
@@ -686,6 +690,9 @@ char *_op_get_register(int reg, int size) {
 }
 
 int _var_size(Variable *var) {
+	if (var->location == LOC_LITL) {
+		return -1;
+	}
 	size_t count = var->ptr_chain.count;
 	int *ptype = vect_get(&var->ptr_chain, count - 1);
 
@@ -703,6 +710,10 @@ int _var_size(Variable *var) {
 // Pure size in the sense that references count as pointers,
 // so returns 8 if reference, pointer, or array.
 int _var_pure_size(Variable *var) {
+	if (var->location == LOC_LITL) {
+		return -1;
+	}
+
 	if ( var->ptr_chain.count > 0 ) {
 		return 8;
 	}
@@ -715,12 +726,12 @@ int _var_pure_size(Variable *var) {
 char *_op_get_location(Variable *var) {
 	char *out = NULL;
 	
-	if (var->location == -2) {
+	if (var->location == LOC_LITL) {
 		out = int_to_str(var->offset);
-	} else if(var->location == -1) {
+	} else if(var->location == LOC_STCK) {
 		// Invert because stack grows down (and stack index starts at 1)
 		out = _gen_address("", "rsp", "", 0, var->offset);
-	} else if (var->location == 0) {
+	} else if (var->location == LOC_DATA) {
 		// Stored in data sec
 		out = _gen_address("", var->name, "", 0, var->offset);
 	} else {
@@ -735,13 +746,22 @@ char *_op_get_location(Variable *var) {
 
 // Can only be used on variables contained in a register.
 void var_chg_register(CompData *out, Variable *swap, int new_reg) {
-	if(swap->location == new_reg || swap->location < 1)
+	if(swap->location == new_reg || swap->location == LOC_DATA || swap->location == LOC_STCK)
 		return;
+
 	vect_push_string(&out->text, "\tmov ");
 	vect_push_free_string(&out->text, _op_get_register(new_reg, _var_pure_size(swap)));
 	vect_push_string(&out->text, ", ");
-	vect_push_free_string(&out->text, _op_get_register(swap->location, _var_pure_size(swap)));
-	vect_push_string(&out->text, " ; Register swap\n\n");
+	
+	if (swap->location == LOC_LITL) {
+		vect_push_free_string(&out->text, int_to_str(swap->offset));
+		vect_push_string(&out->text, " ; Store literal\n\n");
+		swap->offset = 0;
+	} else {
+		vect_push_free_string(&out->text, _op_get_register(swap->location, _var_pure_size(swap)));
+		vect_push_string(&out->text, " ; Register swap\n\n");
+	}
+	
 	swap->location = new_reg;
 }
 
@@ -760,12 +780,15 @@ void var_op_dereference(CompData *out, Variable *store, Variable *from) {
 	if (from->location != 5) {
 		// Generate initial move (from -> rsi)
 		vect_push_string(&out->text, "\tmov rsi, ");
-		if (from->location < 1)
+		if (from->location == LOC_DATA || from->location == LOC_STCK)
 			vect_push_string(&out->text, PREFIXES[7]);
 		
 		vect_push_free_string(&out->text, _op_get_location(from));
 		vect_push_string(&out->text, "; Move for dereference\n");
 	}
+	
+	if (from->location == LOC_LITL)
+		store->offset = 0;
 
 	// Keep de-referencing until we reach the pointer (or ptr_chain bottoms out).
 	int *current = vect_get(&store->ptr_chain, store->ptr_chain.count - 1);
@@ -809,7 +832,9 @@ void var_op_index(CompData *out, Variable *store, Variable *from, Variable *inde
 		idx_by = _gen_address(PREFIXES[_var_size(index) - 1], "rdx", "", 0, 0);
 
 	} else {
-		if (index->location < 1) {
+		if (index->location == LOC_LITL) {
+			idx_by = int_to_str(index->offset);
+		} if (index->location == LOC_STCK || index->location == LOC_DATA) {
 			Vector tmp = vect_from_string(PREFIXES[index->type->size - 1]);
 			vect_push_free_string(&tmp, _op_get_location(index));
 			idx_by = vect_as_string(&tmp);
@@ -1252,7 +1277,7 @@ Variable var_op_member(Variable *from, char *member) {
 	
 	// If the variable is in the data section, we should copy
 	// the name as well so references are properly handled
-	if(out.location == 0) {
+	if(out.location == LOC_DATA) {
 		free(out.name);
 		Vector name = vect_from_string(from->name);
 		out.name = vect_as_string(&name);
@@ -1942,7 +1967,7 @@ Variable tnsl_parse_type(Vector *tokens, size_t cur) {
 	
 	Variable err = {0};
 	err.name = NULL;
-	err.location = -1;
+	err.location = LOC_LITL;
 	err.offset = 0;
 	err.type = NULL;
 
@@ -3110,10 +3135,12 @@ Variable eval(Scope *s, CompData *out, Vector *tokens, size_t *pos, bool keep) {
 	int level = 1;
 	store = _eval(s, out, tokens, start, end, &level);
 	
-	if(keep && store.location <= 0) {
-		var_op_reference(out, &store, &store);
-	} else if(keep && store.location > 0) {
-		var_chg_register(out, &store, 1);
+	if (keep) {
+		if(store.location == LOC_STCK || store.location == LOC_DATA) {
+			var_op_reference(out, &store, &store);
+		} else {
+			var_chg_register(out, &store, 1);
+		}
 	}
 	
 	return store;
@@ -3166,7 +3193,6 @@ void _p2_func_scope_init(Module *root, CompData *out, Scope *fs) {
 	vect_push(&out->text, "push rbp");
 	vect_push(&out->text, "lea rbp, [rsp + 8]");
 	
-	
 	// Push registers to save callee variables (subject to ABI change)
 	vect_push(&out->text, "push r8");
 	vect_push(&out->text, "push r9");
@@ -3176,10 +3202,16 @@ void _p2_func_scope_init(Module *root, CompData *out, Scope *fs) {
 	vect_push(&out->text, "push r13");
 	vect_push(&out->text, "push r14");
 	vect_push(&out->text, "push r15");
+
+	// Load function parameters into expected registers
+	
 }
 
 void _p2_func_scope_end(CompData *out, Scope *fs) {
 	// TODO: Revert state of system to what it was before the function was called
+	
+	
+
 	vect_push(&out->text, "pop r15");
 	vect_push(&out->text, "pop r14");
 	vect_push(&out->text, "pop r13");
@@ -3188,6 +3220,7 @@ void _p2_func_scope_end(CompData *out, Scope *fs) {
 	vect_push(&out->text, "pop r10");
 	vect_push(&out->text, "pop r9");
 	vect_push(&out->text, "pop r8");
+	vect_push(&out->text, "pop rbp"); // restore stack frame
 }
 
 void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *pos) {
