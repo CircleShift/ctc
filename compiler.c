@@ -749,15 +749,17 @@ void var_chg_register(CompData *out, Variable *swap, int new_reg) {
 	if(swap->location == new_reg || swap->location == LOC_DATA || swap->location == LOC_STCK)
 		return;
 
-	vect_push_string(&out->text, "\tmov ");
-	vect_push_free_string(&out->text, _op_get_register(new_reg, _var_pure_size(swap)));
-	vect_push_string(&out->text, ", ");
-	
 	if (swap->location == LOC_LITL) {
+		vect_push_string(&out->text, "\tmov ");
+		vect_push_free_string(&out->text, _op_get_register(new_reg, 8));
+		vect_push_string(&out->text, ", ");
 		vect_push_free_string(&out->text, int_to_str(swap->offset));
 		vect_push_string(&out->text, " ; Store literal\n\n");
 		swap->offset = 0;
 	} else {
+		vect_push_string(&out->text, "\tmov ");
+		vect_push_free_string(&out->text, _op_get_register(new_reg, _var_pure_size(swap)));
+		vect_push_string(&out->text, ", ");
 		vect_push_free_string(&out->text, _op_get_register(swap->location, _var_pure_size(swap)));
 		vect_push_string(&out->text, " ; Register swap\n\n");
 	}
@@ -907,15 +909,27 @@ void var_op_pure_set(CompData *out, Variable *store, Variable *from) {
 	// Setting a struct.
 	if (from->location == LOC_LITL) {
 		vect_push_string(&out->text, "\tmov ");
+
 		if (store->location < 1) {
+			// Must be done in case of a very large value
+			vect_push_string(&out->text, "rsi, ");
+			vect_push_free_string(&out->text, _op_get_location(from));
+			vect_push_string(&out->text, "\n");
+			// Store to data
+			vect_push_string(&out->text, "\tmov ");
 			vect_push_string(&out->text, PREFIXES[_var_pure_size(store) - 1]);
+			vect_push_free_string(&out->text, _op_get_location(store));
+			vect_push_string(&out->text, ", ");
+			vect_push_free_string(&out->text, _op_get_register(5, _var_pure_size(store)));
+			vect_push_string(&out->text, "; literal move\n\n");
+		} else {
+			vect_push_free_string(&out->text, _op_get_location(store));
+			vect_push_string(&out->text, ", ");
+			vect_push_free_string(&out->text, _op_get_location(from));
+			vect_push_string(&out->text, "; literal move\n\n");
 		}
-		vect_push_free_string(&out->text, _op_get_location(store));
-		vect_push_string(&out->text, ", ");
-		vect_push_free_string(&out->text, _op_get_location(from));
-		vect_push_string(&out->text, "; literal move\n\n");
 		
-	} if ( !is_inbuilt(from->type) ) {
+	} if ( !is_inbuilt(from->type->name) ) {
 		// Pure struct move
 		vect_push_string(&out->text, "\tlea rsi, ");
 		vect_push_free_string(&out->text, tmp);
@@ -1053,6 +1067,8 @@ void _var_op_set_inbuilt(CompData *out, Variable *store, Variable *from) {
 	// float - not impl
 	// void - should only be used to represent ptrs, so we should not see it here.
 	
+	// TODO: Fix this in case of literal values 
+
 	// In case of references
 	if (_var_ptr_type(store) == PTYPE_REF){
 		vect_push_string(&out->text, "\tmov rdi, ");
@@ -1100,7 +1116,16 @@ void _var_op_set_inbuilt(CompData *out, Variable *store, Variable *from) {
 		
 	} else if (from->location > 0) {
 		mov_from = _op_get_register(from->location, _var_size(from));
-
+	} else if (from->location == LOC_LITL) {
+		if (store->location < 1 || _var_ptr_type(store) == PTYPE_REF) {
+			vect_push_string(&out->text, "\tmov ");
+			vect_push_free_string(&out->text, _op_get_register(5, _var_size(store)));
+			vect_push_string(&out->text, ", ");
+			vect_push_free_string(&out->text, int_to_str(from->offset));
+			vect_push_string(&out->text, "; litl set for inbuilt mov (from)\n");
+		} else {
+			mov_from = int_to_str(from->offset);
+		}
 	} else if (store->location < 1 || _var_ptr_type(store) == PTYPE_REF) {
 		vect_push_string(&out->text, "\tmov ");
 		vect_push_free_string(&out->text, _op_get_register(5, _var_size(from)));
@@ -1118,7 +1143,7 @@ void _var_op_set_inbuilt(CompData *out, Variable *store, Variable *from) {
 	}
 
 	// Match sign of data if required.
-	if (_var_size(from) < _var_size(store)) {
+	if (from->location != LOC_LITL && _var_size(from) < _var_size(store)) {
 		// Store larger than from (extend sign)
 		if(from->type->name[0] == 'i' && store->type->name[0] == 'i') {
 			if (_var_size(from) < 4)
@@ -1134,7 +1159,7 @@ void _var_op_set_inbuilt(CompData *out, Variable *store, Variable *from) {
 		vect_push_free_string(&out->text, mov_from);
 		vect_push_string(&out->text, " ; Sign extension for mov\n");
 		mov_from = _op_get_register(5, _var_size(store));
-	} else if (_var_size(from) > _var_size(store)) {
+	} else if (from->location != LOC_LITL && _var_size(from) > _var_size(store)) {
 		// Store smaller than from (recompute mov_from)
 		if (_var_ptr_type(from) == PTYPE_REF) {
 		} else if (from->location > 0) {
@@ -1156,6 +1181,22 @@ void _var_op_set_inbuilt(CompData *out, Variable *store, Variable *from) {
 void var_op_set(CompData *out, Variable *store, Variable *from) {
 	if(_var_first_nonref(store) == PTYPE_PTR || _var_first_nonref(store) == PTYPE_ARR) {
 		_var_op_set_ptr(out, store, from);
+		return;
+	}
+
+	if (store->location == LOC_LITL) {
+		if (from->location == LOC_LITL)
+			store->offset = from->offset;
+		else
+			printf("ERROR: Unable to set a non-literal equal to a literal value\n\n");
+		return;
+	}
+
+	if (from->location == LOC_LITL) {
+		if (is_inbuilt(store->type->name) == true)
+			_var_op_set_inbuilt(out, store, from);
+		else
+			printf("ERROR: Unable to set a struct equal to a literal value\n\n");
 		return;
 	}
 
@@ -1229,6 +1270,11 @@ void var_op_set(CompData *out, Variable *store, Variable *from) {
 // Take a variable on the stack or in data section, and load a reference
 // to it's location in memory
 void var_op_reference(CompData *out, Variable *store, Variable *from) {
+	if (from->location == LOC_LITL) {
+		printf("ERROR: Unable to do dereference with literal value\n\n");
+		return;
+	}
+
 	if(from->ptr_chain.count > 0 && _var_ptr_type(from) == PTYPE_REF) {
 		// The value is a reference to data, so we should just copy it
 		var_op_pure_set(out, store, from);
@@ -1271,6 +1317,11 @@ void var_op_reference(CompData *out, Variable *store, Variable *from) {
 Variable var_op_member(Variable *from, char *member) {
 	Variable out = {0};
 	out.name = NULL; // This is how you can check weather we succeeded
+	
+	if (from->location == LOC_LITL) {
+		printf("ERROR: Unable to take member from literal value");
+		return out;
+	}
 
 	for (size_t i = 0; i < from->type->members.count; i++) {
 		Variable *mem = vect_get(&from->type->members, i);
