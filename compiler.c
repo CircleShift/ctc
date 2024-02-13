@@ -300,7 +300,7 @@ void cdat_add(CompData *a, CompData *b) {
 }
 
 void cdat_write_to_file(CompData *cdat, FILE *fout) {
-	fprintf(fout, "format ELF64\n%s\n", vect_as_string(&(cdat->header)));
+	fprintf(fout, "\n%s\n", vect_as_string(&(cdat->header)));
 	fprintf(fout, "%s\n", vect_as_string(&(cdat->data)));
 	fprintf(fout, "%s\n", vect_as_string(&(cdat->text)));
 	fflush(fout);
@@ -607,9 +607,11 @@ char *_op_get_register(int reg, int size) {
 	switch(size) {
 		case 1:
 		case 2:
-			break;
+			if (reg < 9)
+				break;
 		case 4:
-			add = 'e';
+			if (reg < 9)
+				add = 'e';
 		case 8:
 			vect_push(&out, &add);
 			break;
@@ -637,14 +639,18 @@ char *_op_get_register(int reg, int size) {
 			add = 'b';
 			break;
 		default:
+
 			if(reg > 8) {
 				char *tmp = int_to_str(reg - 1);
 				vect_push_string(&out, tmp);
 				free(tmp);
 			}
+			add = 0;
 			break;
 	}
-	vect_push(&out, &add);
+
+	if (add > 0)
+		vect_push(&out, &add);
 
 	add = 'x';
 	switch (reg) {
