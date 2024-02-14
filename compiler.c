@@ -1054,26 +1054,7 @@ void _var_op_set_ptr(CompData *out, Variable *store, Variable *from) {
 	return;
 }
 
-// Common func to move one variable to another in the case of two
-// inbuilts
-void _var_op_set_inbuilt(CompData *out, Variable *store, Variable *from) {
-	char *mov_from;
-	char *mov_to;
-	
-	// Cases for source/dest:
-	// register
-	// stack
-	// data
-	// reference
-	
-	// Cases for types
-	// uint - range from 1 to 8 bytes - zx expansion
-	// int - range from 1 to 8 bytes - sx expansion
-	// bool - always 1 byte
-	// float - not impl
-	// void - should only be used to represent ptrs, so we should not see it here.
-	
-	// In case of references
+char *_var_get_store(CompData *out, Variable *store) {
 	if (_var_ptr_type(store) == PTYPE_REF){
 		vect_push_string(&out->text, "\tmov rdi, ");
 		vect_push_free_string(&out->text, _op_get_location(store));
@@ -1087,15 +1068,18 @@ void _var_op_set_inbuilt(CompData *out, Variable *store, Variable *from) {
 				break; // Should not happen
 		}
 
-		mov_to = _gen_address(PREFIXES[_var_size(store) - 1], "rdi", "", 0, 0);
+		return _gen_address(PREFIXES[_var_size(store) - 1], "rdi", "", 0, 0);
 	} else if (store->location == 0) {
-		mov_to = _gen_address(PREFIXES[_var_size(store) - 1], store->name, "", 0, 0);
+		return _gen_address(PREFIXES[_var_size(store) - 1], store->name, "", 0, 0);
 	} else if (store->location < 0) {
-		mov_to = _gen_address(PREFIXES[_var_size(store) - 1], "rsp", "", 0, -(store->location + 1));
+		return _gen_address(PREFIXES[_var_size(store) - 1], "rsp", "", 0, -(store->location + 1));
 	} else {
-		mov_to = _op_get_location(store);
+		return _op_get_location(store);
 	}
+}
 
+char *_var_get_from(CompData *out, Variable *store, Variable *from) {
+	char *mov_from = NULL;
 
 	if (_var_ptr_type(from) == PTYPE_REF) {
 		vect_push_string(&out->text, "\tmov rsi, ");
@@ -1172,6 +1156,33 @@ void _var_op_set_inbuilt(CompData *out, Variable *store, Variable *from) {
 			mov_from = _op_get_register(from->location, _var_size(store));
 		}
 	}
+
+	return mov_from;
+}
+
+// Common func to move one variable to another in the case of two
+// inbuilts
+void _var_op_set_inbuilt(CompData *out, Variable *store, Variable *from) {
+	char *mov_from;
+	char *mov_to;
+	
+	// Cases for source/dest:
+	// register
+	// stack
+	// data
+	// reference
+	
+	// Cases for types
+	// uint - range from 1 to 8 bytes - zx expansion
+	// int - range from 1 to 8 bytes - sx expansion
+	// bool - always 1 byte
+	// float - not impl
+	// void - should only be used to represent ptrs, so we should not see it here.
+	
+	// In case of references
+
+	mov_to = _var_get_store(out, store);
+	mov_from = _var_get_from(out, store, from);
 
 	vect_push_string(&out->text, "\tmov ");
 	vect_push_free_string(&out->text, mov_to);
@@ -1362,15 +1373,120 @@ Variable var_op_member(Variable *from, char *member) {
 // Adds "base" with "add" and sets "base" to the result
 void var_op_add(CompData *out, Variable *base, Variable *add) {
 
+	if(base->location == LOC_LITL) {
+		if (add->location == LOC_LITL)
+			base->offset += add->offset;
+		return;
+	}
+
+	char *add_store;
+	char *add_from;
+
+	add_store = _var_get_store(out, base);
+	add_from = _var_get_from(out, base, add);
+
+	vect_push_string(&out->text, "\tadd ");
+	vect_push_free_string(&out->text, add_store);
+	vect_push_string(&out->text, ", ");
+	vect_push_free_string(&out->text, add_from);
+	vect_push_string(&out->text, "; complete add\n\n");
 }
 
 // Subtracts "sub" from "base" and sets "base" to the result
 void var_op_sub(CompData *out, Variable *base, Variable *sub) {
+	if(base->location == LOC_LITL) {
+		if (sub->location == LOC_LITL)
+			base->offset -= sub->offset;
+		return;
+	}
 
+	char *sub_store;
+	char *sub_from;
+
+	sub_store = _var_get_store(out, base);
+	sub_from = _var_get_from(out, base, sub);
+
+	vect_push_string(&out->text, "\tsub ");
+	vect_push_free_string(&out->text, sub_store);
+	vect_push_string(&out->text, ", ");
+	vect_push_free_string(&out->text, sub_from);
+	vect_push_string(&out->text, "; complete sub\n\n");
+}
+
+// Ands "base" with "and" and sets "base" to the result
+void var_op_and(CompData *out, Variable *base, Variable *and) {
+
+	if(base->location == LOC_LITL) {
+		if (and->location == LOC_LITL)
+			base->offset &= and->offset;
+		return;
+	}
+
+	char *and_store;
+	char *and_from;
+
+	and_store = _var_get_store(out, base);
+	and_from = _var_get_from(out, base, and);
+
+	vect_push_string(&out->text, "\tand ");
+	vect_push_free_string(&out->text, and_store);
+	vect_push_string(&out->text, ", ");
+	vect_push_free_string(&out->text, and_from);
+	vect_push_string(&out->text, "; complete and\n\n");
+}
+
+// Ors "base" with "or" and sets "base" to the result
+void var_op_or(CompData *out, Variable *base, Variable *or) {
+
+	if(base->location == LOC_LITL) {
+		if (or->location == LOC_LITL)
+			base->offset |= or->offset;
+		return;
+	}
+
+	char *or_store;
+	char *or_from;
+
+	or_store = _var_get_store(out, base);
+	or_from = _var_get_from(out, base, or);
+
+	vect_push_string(&out->text, "\tor ");
+	vect_push_free_string(&out->text, or_store);
+	vect_push_string(&out->text, ", ");
+	vect_push_free_string(&out->text, or_from);
+	vect_push_string(&out->text, "; complete or\n\n");
+}
+
+// Xors "base" with "xor" and sets "base" to the result
+void var_op_xor(CompData *out, Variable *base, Variable *xor) {
+
+	if(base->location == LOC_LITL) {
+		if (xor->location == LOC_LITL)
+			base->offset ^= xor->offset;
+		return;
+	}
+
+	char *xor_store;
+	char *xor_from;
+
+	xor_store = _var_get_store(out, base);
+	xor_from = _var_get_from(out, base, xor);
+
+	vect_push_string(&out->text, "\tadd ");
+	vect_push_free_string(&out->text, xor_store);
+	vect_push_string(&out->text, ", ");
+	vect_push_free_string(&out->text, xor_from);
+	vect_push_string(&out->text, "; complete xor\n\n");
 }
 
 // Multiplies "base" by "mul" and sets "base" to the result.
 void var_op_mul(CompData *out, Variable *base, Variable *mul) {
+	if(base->location == LOC_LITL) {
+		if (mul->location == LOC_LITL)
+			base->offset *= mul->offset;
+		return;
+	}
+
 	if(base->type->name[0] == 'i') {
 		// Integer multiplication
 	} else {
@@ -1380,12 +1496,24 @@ void var_op_mul(CompData *out, Variable *base, Variable *mul) {
 
 // Divides "base" by "div" and sets "base" to the result
 void var_op_div(CompData *out, Variable *base, Variable *div) {
+	if(base->location == LOC_LITL) {
+		if (div->location == LOC_LITL)
+			base->offset /= div->offset;
+		return;
+	}
+
 	// zero out rdx before divide
 	vect_push_string(&out->text, "\txor rdx, rdx ; Clear rdx for divide\n");
 }
 
 // Divides "base" by "mod" and sets "base" to the remainder
 void var_op_mod(CompData *out, Variable *base, Variable *mod) {
+	if(base->location == LOC_LITL) {
+		if (mod->location == LOC_LITL)
+			base->offset %= mod->offset;
+		return;
+	}
+
 	// zero out rdx before divide
 	vect_push_string(&out->text, "\txor rdx, rdx ; Clear rdx for divide\n");
 }
@@ -3041,6 +3169,10 @@ void scope_end(Scope *s) {
 	}
 	vect_end(&s->vars);
 }
+
+// TODO: Scope ops like sub-scoping, variable management
+// conditional handling, data-section parts for function
+// literals, etc.
 
 bool p2_error = false;
 
