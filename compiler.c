@@ -1057,7 +1057,7 @@ void _var_op_set_ptr(CompData *out, Variable *store, Variable *from) {
 char *_var_get_store(CompData *out, Variable *store) {
 	if (_var_ptr_type(store) == PTYPE_REF){
 		vect_push_string(&out->text, "\tmov rdi, ");
-		addvect_push_free_string(&out->text, _op_get_location(store));
+		vect_push_free_string(&out->text, _op_get_location(store));
 		vect_push_string(&out->text, " ; pre-deref for inbuilt mov (store)\n");
 
 		for(size_t i = store->ptr_chain.count - 1; i > 0; i--){
@@ -1495,6 +1495,16 @@ void var_op_mul(CompData *out, Variable *base, Variable *mul) {
 			vect_push_string(&out->text, ", ");
 			vect_push_free_string(&out->text, _var_get_from(out, base, mul));
 			vect_push_string(&out->text, "; complete mul\n\n");
+		} else if (base->location > 0) {
+			vect_push_string(&out->text, "\tmov rcx, ");
+			vect_push_free_string(&out->text, int_to_str(mul->offset));
+			vect_push_string(&out->text, "; literal load\n");
+
+			vect_push_string(&out->text, "\timul ");
+			vect_push_free_string(&out->text, _var_get_store(out, base));
+			vect_push_string(&out->text, ", ");
+			vect_push_free_string(&out->text, _op_get_register(3, _var_size(base)));
+			vect_push_string(&out->text, "; complete mul\n\n");
 		} else {
 			// Mov to rax for the multiplication, move back after.
 			vect_push_string(&out->text, "\tmov ");
@@ -1503,9 +1513,19 @@ void var_op_mul(CompData *out, Variable *base, Variable *mul) {
 			vect_push_free_string(&out->text, _var_get_store(out, base));
 			vect_push_string(&out->text, "; pre-mul mov\n");
 
-			vect_push_string(&out->text, "\timul ");
-			vect_push_free_string(&out->text, _var_get_from(out, base, mul));
-			vect_push_string(&out->text, "; mul\n");
+			if (mul->location == LOC_LITL) {
+				vect_push_string(&out->text, "\tmov rcx, ");
+				vect_push_free_string(&out->text, int_to_str(mul->offset));
+				vect_push_string(&out->text, "; literal load\n");
+
+				vect_push_string(&out->text, "\timul ");
+				vect_push_free_string(&out->text, _op_get_register(3, _var_size(base)));
+				vect_push_string(&out->text, "; mul\n");
+			} else {
+				vect_push_string(&out->text, "\timul ");
+				vect_push_free_string(&out->text, _var_get_from(out, base, mul));
+				vect_push_string(&out->text, "; mul\n");
+			}
 			
 			// move back after mul
 			vect_push_string(&out->text, "\tmov ");
@@ -1521,9 +1541,19 @@ void var_op_mul(CompData *out, Variable *base, Variable *mul) {
 		vect_push_free_string(&out->text, _var_get_store(out, base));
 		vect_push_string(&out->text, "; pre-mul mov\n");
 
-		vect_push_string(&out->text, "\tmul ");
-		vect_push_free_string(&out->text, _var_get_from(out, base, mul));
-		vect_push_string(&out->text, "; mul\n");
+		if (mul->location == LOC_LITL) {
+			vect_push_string(&out->text, "\tmov rcx, ");
+			vect_push_free_string(&out->text, int_to_str(mul->offset));
+			vect_push_string(&out->text, "; literal load\n");
+
+			vect_push_string(&out->text, "\tmul ");
+			vect_push_free_string(&out->text, _op_get_register(3, _var_size(base)));
+			vect_push_string(&out->text, "; mul\n");
+		} else {
+			vect_push_string(&out->text, "\tmul ");
+			vect_push_free_string(&out->text, _var_get_from(out, base, mul));
+			vect_push_string(&out->text, "; mul\n");
+		}
 		
 		// move back after mul
 		vect_push_string(&out->text, "\tmov ");
