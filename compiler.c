@@ -161,7 +161,7 @@ Vector vect_from_string(char *s) {
 // vector if you must have both, or want an independant copy
 // of the string.
 char *vect_as_string(Vector *v) {
-	((char*)v->data)[v->count * v->_el_sz] = 0;
+	((char*)v->data)[v->count] = 0;
 	return v->data;
 }
 
@@ -372,9 +372,9 @@ typedef struct Module {
 } Module;
 
 typedef struct {
-	char *name;       // Name of the type
-	int size;         // Size (bytes) of the type
-	Vector members;   // Member variables (Stored as variables)
+	char *name;         // Name of the type
+	int size;           // Size (bytes) of the type
+	Vector members;     // Member variables (Stored as variables)
 	Module *module;     // Module (for methods and member-type resolution) to tie the type to.
 } Type;
 
@@ -1073,8 +1073,6 @@ void _var_op_set_inbuilt(CompData *out, Variable *store, Variable *from) {
 	// float - not impl
 	// void - should only be used to represent ptrs, so we should not see it here.
 	
-	// TODO: Fix this in case of literal values 
-
 	// In case of references
 	if (_var_ptr_type(store) == PTYPE_REF){
 		vect_push_string(&out->text, "\tmov rdi, ");
@@ -1098,7 +1096,7 @@ void _var_op_set_inbuilt(CompData *out, Variable *store, Variable *from) {
 		mov_to = _op_get_location(store);
 	}
 
-	// TODO: Get mov_from for this func
+
 	if (_var_ptr_type(from) == PTYPE_REF) {
 		vect_push_string(&out->text, "\tmov rsi, ");
 		vect_push_free_string(&out->text, _op_get_location(from));
@@ -1129,6 +1127,7 @@ void _var_op_set_inbuilt(CompData *out, Variable *store, Variable *from) {
 			vect_push_string(&out->text, ", ");
 			vect_push_free_string(&out->text, int_to_str(from->offset));
 			vect_push_string(&out->text, "; litl set for inbuilt mov (from)\n");
+			mov_from = _op_get_register(5, _var_size(store));
 		} else {
 			mov_from = int_to_str(from->offset);
 		}
