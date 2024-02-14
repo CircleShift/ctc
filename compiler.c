@@ -1574,6 +1574,77 @@ void var_op_div(CompData *out, Variable *base, Variable *div) {
 
 	// zero out rdx before divide
 	vect_push_string(&out->text, "\txor rdx, rdx ; Clear rdx for divide\n");
+
+	char *div_by;
+	if (base->type->name[0] == 'i') {
+		// mov into rax
+		switch(_var_size(base)) {
+		case 4:
+			vect_push_string(&out->text, "\tmovsxd rax, ");
+			break;
+		case 8:
+			vect_push_string(&out->text, "\tmov rax, ");
+			break;
+		default:
+			vect_push_string(&out->text, "\tmovsx rax, ");
+			break;
+		}
+		vect_push_free_string(&out->text, _var_get_store(out, base));
+		vect_push_string(&out->text, "; initial mov\n\n");
+
+		// Calculate div_by
+		if(_var_size(base) > _var_size(div) && div->location == LOC_LITL) {
+			vect_push_string(&out->text, "\tmov rcx, ");
+			vect_push_free_string(&out->text, int_to_str(div->offset));
+			div_by = _op_get_register(3, _var_size(base));
+
+		} else {
+			div_by = _var_get_from(out, base, div);
+		}
+
+		// Do div
+		vect_push_string(&out->text, "\tidiv ");
+		vect_push_free_string(&out->text, div_by);
+		vect_push_string(&out->text, "; div\n");
+
+	} else {
+		// mov into rax
+		switch(_var_size(base)) {
+		case 4:
+			vect_push_string(&out->text, "\tmov eax, ");
+			break;
+		case 8:
+			vect_push_string(&out->text, "\tmov rax, ");
+			break;
+		default:
+			vect_push_string(&out->text, "\tmovzx rax, ");
+		}
+		vect_push_free_string(&out->text, _var_get_store(out, base));
+		vect_push_string(&out->text, "; initial mov\n\n");
+		
+		// Calculate div by
+		if(_var_size(base) > _var_size(div) && div->location == LOC_LITL) {
+			vect_push_string(&out->text, "\tmov rcx, ");
+			vect_push_free_string(&out->text, int_to_str(div->offset));
+			div_by = _op_get_register(3, _var_size(base));
+
+		} else {
+			div_by = _var_get_from(out, base, div);
+		}
+
+		// Do div
+		vect_push_string(&out->text, "\tdiv ");
+		vect_push_free_string(&out->text, div_by);
+		vect_push_string(&out->text, "; div\n");
+	}
+
+	// Mov back to base
+	vect_push_string(&out->text, "\tmov ");
+	vect_push_free_string(&out->text, _var_get_store(out, base));
+	vect_push_string(&out->text, ", ");
+	vect_push_free_string(&out->text, _op_get_register(1, _var_size(base)));
+	vect_push_string(&out->text, "; final mov for div\n\n");
+
 }
 
 // Divides "base" by "mod" and sets "base" to the remainder
@@ -1586,6 +1657,76 @@ void var_op_mod(CompData *out, Variable *base, Variable *mod) {
 
 	// zero out rdx before divide
 	vect_push_string(&out->text, "\txor rdx, rdx ; Clear rdx for divide\n");
+	
+	char *div_by;
+	if (base->type->name[0] == 'i') {
+		// mov into rax
+		switch(_var_size(base)) {
+		case 4:
+			vect_push_string(&out->text, "\tmovsxd rax, ");
+			break;
+		case 8:
+			vect_push_string(&out->text, "\tmov rax, ");
+			break;
+		default:
+			vect_push_string(&out->text, "\tmovsx rax, ");
+			break;
+		}
+		vect_push_free_string(&out->text, _var_get_store(out, base));
+		vect_push_string(&out->text, "; initial mov\n\n");
+
+		// Calculate div_by
+		if(_var_size(base) > _var_size(mod) && mod->location == LOC_LITL) {
+			vect_push_string(&out->text, "\tmov rcx, ");
+			vect_push_free_string(&out->text, int_to_str(mod->offset));
+			div_by = _op_get_register(3, _var_size(base));
+
+		} else {
+			div_by = _var_get_from(out, base, mod);
+		}
+
+		// Do div
+		vect_push_string(&out->text, "\tidiv ");
+		vect_push_free_string(&out->text, div_by);
+		vect_push_string(&out->text, "; div\n");
+
+	} else {
+		// mov into rax
+		switch(_var_size(base)) {
+		case 4:
+			vect_push_string(&out->text, "\tmov eax, ");
+			break;
+		case 8:
+			vect_push_string(&out->text, "\tmov rax, ");
+			break;
+		default:
+			vect_push_string(&out->text, "\tmovzx rax, ");
+		}
+		vect_push_free_string(&out->text, _var_get_store(out, base));
+		vect_push_string(&out->text, "; initial mov\n\n");
+
+		// Calculate div by
+		if(_var_size(base) > _var_size(mod) && mod->location == LOC_LITL) {
+			vect_push_string(&out->text, "\tmov rcx, ");
+			vect_push_free_string(&out->text, int_to_str(mod->offset));
+			div_by = _op_get_register(3, _var_size(base));
+
+		} else {
+			div_by = _var_get_from(out, base, mod);
+		}
+
+		// Do div
+		vect_push_string(&out->text, "\tdiv ");
+		vect_push_free_string(&out->text, div_by);
+		vect_push_string(&out->text, "; div\n");
+	}
+
+	// Mov back to base
+	vect_push_string(&out->text, "\tmov ");
+	vect_push_free_string(&out->text, _var_get_store(out, base));
+	vect_push_string(&out->text, ", ");
+	vect_push_free_string(&out->text, _op_get_register(4, _var_size(base)));
+	vect_push_string(&out->text, "; final mov for mod\n\n");
 }
 
 
