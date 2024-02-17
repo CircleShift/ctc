@@ -522,11 +522,14 @@ char *PREFIXES[] = {
 };
 
 /// Remember to free!
-char *_gen_address(char *prefix, char *base, char *offset, int mult, int add) {
+char *_gen_address(char *prefix, char *base, char *offset, int mult, int add, bool rel) {
 	Vector out = vect_init(sizeof(char));
 
 	vect_push_string(&out, prefix);
-	vect_push_string(&out, "[");
+	if (rel)
+		vect_push_string(&out, "[rel ");
+	else
+		vect_push_string(&out, "[");
 	vect_push_string(&out, base);
 	
 	if (offset != NULL && mult > 0) {
@@ -736,10 +739,10 @@ char *_op_get_location(Variable *var) {
 		out = int_to_str(var->offset);
 	} else if(var->location == LOC_STCK) {
 		// Invert because stack grows down (and stack index starts at 1)
-		out = _gen_address("", "rsp", "", 0, var->offset);
+		out = _gen_address("", "rsp", "", 0, var->offset, false);
 	} else if (var->location == LOC_DATA) {
 		// Stored in data sec
-		out = _gen_address("", var->name, "", 0, var->offset);
+		out = _gen_address("", var->name, "", 0, var->offset, true);
 	} else {
 		// Stored in register.  Our job here is not to assume
 		// what it will be used for (in the case it is a reference)
@@ -839,7 +842,7 @@ void var_op_index(CompData *out, Variable *store, Variable *from, Variable *inde
 				break;
 		}
 
-		idx_by = _gen_address(PREFIXES[_var_size(index) - 1], "rdx", "", 0, 0);
+		idx_by = _gen_address(PREFIXES[_var_size(index) - 1], "rdx", "", 0, 0, false);
 
 	} else {
 		if (index->location == LOC_STCK || index->location == LOC_DATA) {
@@ -888,10 +891,10 @@ void var_op_index(CompData *out, Variable *store, Variable *from, Variable *inde
 
 	vect_push_string(&out->text, "\tlea rsi, ");
 	if (_var_first_nonref(from) == PTYPE_PTR) {
-		vect_push_free_string(&out->text, _gen_address("", "rsi", "rax", 1, 0));
+		vect_push_free_string(&out->text, _gen_address("", "rsi", "rax", 1, 0, false));
 	} else if (_var_first_nonref(from) == PTYPE_ARR) {
 		// Additional offset due to arrays containing a length at the start
-		vect_push_free_string(&out->text, _gen_address("", "rsi", "rax", 1, 8));
+		vect_push_free_string(&out->text, _gen_address("", "rsi", "rax", 1, 8, false));
 	} else {
 		vect_push_string(&out->text, "rsi ; COMPILER ERROR!");
 	}
@@ -999,7 +1002,7 @@ void _var_op_set_ptr(CompData *out, Variable *store, Variable *from) {
 				break;
 			}
 		}
-		mov_to = _gen_address("", "rdi", "", 0, 0);
+		mov_to = _gen_address("", "rdi", "", 0, 0, false);
 	}
 
 	if (_var_ptr_type(from) != PTYPE_REF) {
@@ -1068,11 +1071,11 @@ char *_var_get_store(CompData *out, Variable *store) {
 				break; // Should not happen
 		}
 
-		return _gen_address(PREFIXES[_var_size(store) - 1], "rdi", "", 0, 0);
+		return _gen_address(PREFIXES[_var_size(store) - 1], "rdi", "", 0, 0, false);
 	} else if (store->location == 0) {
-		return _gen_address(PREFIXES[_var_size(store) - 1], store->name, "", 0, 0);
+		return _gen_address(PREFIXES[_var_size(store) - 1], store->name, "", 0, 0, true);
 	} else if (store->location < 0) {
-		return _gen_address(PREFIXES[_var_size(store) - 1], "rsp", "", 0, -(store->location + 1));
+		return _gen_address(PREFIXES[_var_size(store) - 1], "rsp", "", 0, -(store->location + 1), false);
 	} else {
 		return _op_get_location(store);
 	}
@@ -1125,10 +1128,10 @@ char *_var_get_from(CompData *out, Variable *store, Variable *from) {
 		mov_from = _op_get_register(5, _var_size(from));
 	} else if (from->location == 0) {
 		// from in data sec
-		mov_from = _gen_address(PREFIXES[_var_size(from) - 1], from->name, "", 0, 0);
+		mov_from = _gen_address(PREFIXES[_var_size(from) - 1], from->name, "", 0, 0, true);
 	} else {
 		// from on stack
-		mov_from = _gen_address(PREFIXES[_var_size(from) - 1], "rsp", "", 0, -(from->location + 1));
+		mov_from = _gen_address(PREFIXES[_var_size(from) - 1], "rsp", "", 0, -(from->location + 1), false);
 	}
 
 	// Match sign of data if required.
@@ -2566,6 +2569,8 @@ int tnsl_find_closing(Vector *tokens, size_t cur) {
 		}
 	}
 
+	printf("Could not find closing for delimiter (line %d, col %d, \"%s\")\n\n", first->line, first->col, first->data);
+
 	return -1;
 }
 
@@ -3381,6 +3386,9 @@ void scope_end(Scope *s) {
 	vect_end(&s->vars);
 }
 
+char *scope_label() {
+}
+
 // TODO: Scope ops like sub-scoping, variable management
 // conditional handling, data-section parts for function
 // literals, etc.
@@ -3499,9 +3507,22 @@ int op_order(Token *t) {
 void eval_strict() {
 }
 
+Variable _eval_call() {
+
+}
+
+Variable _eval_dot() {
+
+}
+
+Variable _eval_composite() {
+
+}
+
 // Main implementation, recursive
-Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t end, int *level) {
+Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t end, Variable *tmp) {
 	Variable out;
+	out.name = NULL;
 
 	int op = -1;
 	int op_pos = 0;
@@ -3513,14 +3534,42 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 			if(delim < 0) {
 				delim = i;
 			}
-			i = tnsl_find_closing(tokens, i);
-		} else if (t->type == TT_AUGMENT && (op < 0 || op_order(t) > op)) {
+			int dcl = tnsl_find_closing(tokens, i);
+			if (dcl < 0) {
+				printf("ERROR: could not find closing for delimiter \"%s\" (%d:%d)\n", t->data, t->line, t->col);
+				p2_error = true;
+				i = end;
+			} else {
+				i = dcl;
+			}
+		} else if (t->type == TT_AUGMENT && op_order(t) > op) {
 			op = op_order(t);
 			op_pos = i;
 		}
 	}
 
 	// Found first delim and lowest priority op
+	
+	// Handle delim
+	if (delim > -1 && op < 2){
+		Token *d = vect_get(tokens, delim);
+		int dcl = tnsl_find_closing(tokens, delim);
+		switch (d->data[0]){
+			case '(':
+			case '[':
+			case '{':
+				if (delim > start || dcl < end - 1) {
+					
+				}
+			case '/':
+			default:
+				p2_error = true;
+		}
+	}
+	
+	Token *op_token = vect_get(tokens, op_pos);
+
+	// Based on op_token, split the two halves and recurse.
 
 	return out;
 }
@@ -3545,15 +3594,16 @@ Variable eval(Scope *s, CompData *out, Vector *tokens, size_t *pos, bool keep) {
 		}
 	}
 
-	int level = 1;
-	store = _eval(s, out, tokens, start, end, &level);
+	store = _eval(s, out, tokens, start, end, NULL);
 	
 	if (keep) {
 		if(store.location == LOC_STCK || store.location == LOC_DATA) {
-			var_op_reference(out, &store, &store);
-		} else {
-			var_chg_register(out, &store, 1);
+			Variable tmp;
+			var_op_reference(out, &tmp, &store);
+			var_end(&store);
+			store = tmp;
 		}
+		var_chg_register(out, &store, 1);
 	}
 	
 	return store;
@@ -3601,6 +3651,8 @@ void _p2_handle_method_scope(Module *root, CompData *out, Scope *fs) {
 
 void _p2_func_scope_init(Module *root, CompData *out, Scope *fs) {
 	// TODO: decide what happens when a function scope is created
+	
+	// put the label
 	
 	// Update stack pointers
 	vect_push(&out->text, "push rbp");
@@ -3705,7 +3757,7 @@ void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *po
 				t = vect_get(tokens, *pos + 1);
 				if (f->outputs.count > 0) {
 					if (*pos + 1 < end && !tok_str_eq(t, "\n"))
-						eval(&fs, out, tokens, pos, true);
+						eval(&fs, out, tokens, pos + 1, true);
 					else {
 						t = vect_get(tokens, *pos);
 						printf("ERROR: Attempt to return from a function without a value, but the function requires one (%d:%d)", t->line, t->col);
@@ -3714,7 +3766,6 @@ void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *po
 				}
 				_p2_func_scope_end(out, &fs);
 				*pos = end;
-				return;
 			} else if (tok_str_eq(t, "asm")) {
 				t = vect_get(tokens, ++(*pos));
 				if(t->type != TT_LITERAL || t->data[0] != '"') {
@@ -3735,7 +3786,8 @@ void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *po
 			eval(&fs, out, tokens, pos, false);
 		}
 	}
-
+	
+	scope_end(&fs);
 	*pos = end;
 }
 
