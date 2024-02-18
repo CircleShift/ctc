@@ -384,6 +384,7 @@ typedef struct {
 	Vector ptr_chain;
 	int location; // negative one for on stack, negative two for literal, zero for in data section, positive for in register
 	int offset;   // offset for member variables (if this is a literal, it represents the actual value)
+	Module *mod;  // Only used in the case of a data section variable;
 } Variable;
 
 #define LOC_LITL -2
@@ -483,6 +484,7 @@ Variable var_init(char *name, Type *type) {
 	out.ptr_chain = vect_init(sizeof(int));
 	out.location = 0;
 	out.offset = 0;
+	out.mod = NULL;
 
 	return out;
 }
@@ -492,6 +494,7 @@ Variable var_copy(Variable *to_copy) {
 
 	out.location = to_copy->location;
 	out.offset = to_copy->offset;
+	out.mod = to_copy->mod;
 
 	for (size_t i = 0; i < to_copy->ptr_chain.count; i++) {
 		int *ptr_orig = vect_get(&(to_copy->ptr_chain), i);
@@ -706,7 +709,7 @@ int _var_size(Variable *var) {
 	int *ptype = vect_get(&var->ptr_chain, count - 1);
 
 	while(count > 0 && *ptype == PTYPE_REF) {
-		ptype = vect_get(&var->ptr_chain, --count);
+	ptype = vect_get(&var->ptr_chain, --count);
 	}
 
 	if(count > 0) {
@@ -730,6 +733,17 @@ int _var_pure_size(Variable *var) {
 	return var->type->size;
 }
 
+char *mod_label_prefix(Module *m);
+
+// Get the full label in the data section
+// for address generation
+char *_var_get_datalabel(Variable *var) {
+	Vector v = vect_from_string("");
+	vect_push_free_string(&v, mod_label_prefix(var->mod));
+	vect_push_string(&v, var->name);
+	return vect_as_string(&v);
+}
+
 // Gets the location of a variable. Can not get the location
 // properly if the variable is a reference.
 char *_op_get_location(Variable *var) {
@@ -742,7 +756,9 @@ char *_op_get_location(Variable *var) {
 		out = _gen_address("", "rsp", "", 0, var->offset, false);
 	} else if (var->location == LOC_DATA) {
 		// Stored in data sec
-		out = _gen_address("", var->name, "", 0, var->offset, true);
+		char *name = _var_get_datalabel(var);
+		out = _gen_address("", name, "", 0, var->offset, true);
+		free(name);
 	} else {
 		// Stored in register.  Our job here is not to assume
 		// what it will be used for (in the case it is a reference)
@@ -1073,7 +1089,9 @@ char *_var_get_store(CompData *out, Variable *store) {
 
 		return _gen_address(PREFIXES[_var_size(store) - 1], "rdi", "", 0, 0, false);
 	} else if (store->location == 0) {
-		return _gen_address(PREFIXES[_var_size(store) - 1], store->name, "", 0, 0, true);
+		char *name = _var_get_datalabel(store);
+		return _gen_address(PREFIXES[_var_size(store) - 1], name, "", 0, 0, true);
+		free(name);
 	} else if (store->location < 0) {
 		return _gen_address(PREFIXES[_var_size(store) - 1], "rsp", "", 0, -(store->location + 1), false);
 	} else {
@@ -1128,7 +1146,9 @@ char *_var_get_from(CompData *out, Variable *store, Variable *from) {
 		mov_from = _op_get_register(5, _var_size(from));
 	} else if (from->location == 0) {
 		// from in data sec
-		mov_from = _gen_address(PREFIXES[_var_size(from) - 1], from->name, "", 0, 0, true);
+		char *name = _var_get_datalabel(from);
+		mov_from = _gen_address(PREFIXES[_var_size(from) - 1], name, "", 0, 0, true);
+		free(name);
 	} else {
 		// from on stack
 		mov_from = _gen_address(PREFIXES[_var_size(from) - 1], "rsp", "", 0, -(from->location + 1), false);
@@ -1892,6 +1912,17 @@ void mod_full_path_rec(Module *m, Vector *v) {
 char *mod_full_path(Module *m) {
 	Vector out = vect_init(sizeof(char));
 	mod_full_path_rec(m, &out);
+	return vect_as_string(&out);
+}
+
+char *mod_label_prefix(Module *m) {
+	Vector out = vect_from_string("");
+	
+	while (m != NULL) {
+		vect_push_string(&out, m->name);
+		vect_push_string(&out, ".");
+	}
+
 	return vect_as_string(&out);
 }
 
@@ -2802,6 +2833,7 @@ void p1_parse_struct(Module *add, Vector *tokens, size_t *pos) {
 void p1_parse_def(Module *root, Vector *tokens, size_t *pos) {
 	Variable type = tnsl_parse_type(tokens, *pos);
 	*pos = type.location;
+	type.mod = root;
 
 	Token *t = vect_get(tokens, *pos);
 	if (t == NULL || t->type != TT_DEFWORD) {
@@ -3330,8 +3362,8 @@ void p1_resolve_types(Module *root) {
 
 		Artifact rtn = art_from_str(n_end + 1, '.');
 		*n_end = 0;
-		Vector name = vect_from_string(v->name);
-		free(v->name);
+		Vector name = vect_from_string("");
+		vect_push_free_string(&name, v->name);
 		v->name = vect_as_string(&name);
 
 		Type *t = mod_find_type(root, &rtn);
@@ -3386,7 +3418,63 @@ void scope_end(Scope *s) {
 	vect_end(&s->vars);
 }
 
-char *scope_label() {
+// Label generation
+void _scope_name_rec(Scope *s, Vector *v) {
+	// Base case
+	if (s == NULL)
+		return;
+
+	_scope_name_rec(s->parent, v);
+	
+	// Add # before name if not directly from module
+	if (s->parent != NULL)
+		vect_push_string(v, "#");
+	vect_push_string(v, s->name);
+}
+
+Vector _scope_base_label(Scope *s) {
+	Vector out = vect_from_string("");
+	vect_push_free_string(&out, mod_label_prefix(s->current));
+
+	_scope_name_rec(s, &out);
+
+	return out;
+}
+
+char *scope_label_start(Scope *s) {
+	Vector out = _scope_base_label(s);
+	vect_push_string(&out, "#start");
+	return vect_as_string(&out);
+}
+
+char *scope_label_rep(Scope *s) {
+	Vector out = _scope_base_label(s);
+	vect_push_string(&out, "#rep");
+	return vect_as_string(&out);
+}
+
+char *scope_label_end(Scope *s) {
+	Vector out = _scope_base_label(s);
+	vect_push_string(&out, "#end");
+	return vect_as_string(&out);
+}
+
+// Temp variable gen
+Variable scope_gen_tmp(Scope *s) {
+}
+
+void scope_release_tmp(Scope *s, Variable *v) {
+}
+
+// Sub scopes
+Scope scope_subscope(Scope *s, char *name) {
+}
+
+// Scope variable creation and management
+Variable scope_new_var(Scope *s, Type *t) {
+}
+
+Variable scope_move_to_stack(Scope *s, Variable *v) {
 }
 
 // TODO: Scope ops like sub-scoping, variable management
