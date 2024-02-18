@@ -286,9 +286,9 @@ typedef struct {
 CompData cdat_init() {
 	CompData out = {0};
 
-	out.header = vect_init(sizeof(char));
-	out.data = vect_init(sizeof(char));
-	out.text = vect_init(sizeof(char));
+	out.header = vect_from_string("");
+	out.data = vect_from_string("");
+	out.text = vect_from_string("");
 
 	return out;
 }
@@ -2719,13 +2719,15 @@ void p1_parse_params(Vector *var_list, Vector *tokens, size_t *pos) {
 				vect_end(&(current_type.ptr_chain));
 			}
 			current_type = tnsl_parse_type(tokens, *pos);
-			*pos = tnsl_next_non_nl(tokens, current_type.location - 1);
+			
+			if (current_type.location > 0)
+				*pos = tnsl_next_non_nl(tokens, current_type.location - 1);
 		}
 
 		t = vect_get(tokens, *pos);
 		
 		if (current_type.name == NULL) {
-			printf("ERROR: Expected a type before the first member/parameter\n");
+			printf("ERROR: Expected a valid type.\n");
 			printf("       \"%s\" line %d column %d\n\n", t->data, t->line, t->col);
 			p1_error = true;
 			break;
@@ -3743,18 +3745,18 @@ void _p2_func_scope_init(Module *root, CompData *out, Scope *fs) {
 	// put the label
 	
 	// Update stack pointers
-	vect_push(&out->text, "push rbp");
-	vect_push(&out->text, "lea rbp, [rsp + 8]");
+	vect_push_string(&out->text, "\tpush rbp\n");
+	vect_push_string(&out->text, "\tlea rbp, [rsp + 8]\n");
 	
 	// Push registers to save callee variables (subject to ABI change)
-	vect_push(&out->text, "push r8");
-	vect_push(&out->text, "push r9");
-	vect_push(&out->text, "push r10");
-	vect_push(&out->text, "push r11");
-	vect_push(&out->text, "push r12");
-	vect_push(&out->text, "push r13");
-	vect_push(&out->text, "push r14");
-	vect_push(&out->text, "push r15");
+	vect_push_string(&out->text, "\tpush r8\n");
+	vect_push_string(&out->text, "\tpush r9\n");
+	vect_push_string(&out->text, "\tpush r10\n");
+	vect_push_string(&out->text, "\tpush r11\n");
+	vect_push_string(&out->text, "\tpush r12\n");
+	vect_push_string(&out->text, "\tpush r13\n");
+	vect_push_string(&out->text, "\tpush r14\n");
+	vect_push_string(&out->text, "\tpush r15 ; scope init\n\n");
 
 	// Load function parameters into expected registers
 	
@@ -3765,15 +3767,15 @@ void _p2_func_scope_end(CompData *out, Scope *fs) {
 	
 	
 
-	vect_push(&out->text, "pop r15");
-	vect_push(&out->text, "pop r14");
-	vect_push(&out->text, "pop r13");
-	vect_push(&out->text, "pop r12");
-	vect_push(&out->text, "pop r11");
-	vect_push(&out->text, "pop r10");
-	vect_push(&out->text, "pop r9");
-	vect_push(&out->text, "pop r8");
-	vect_push(&out->text, "pop rbp"); // restore stack frame
+	vect_push_string(&out->text, "\tpop r15\n");
+	vect_push_string(&out->text, "\tpop r14\n");
+	vect_push_string(&out->text, "\tpop r13\n");
+	vect_push_string(&out->text, "\tpop r12\n");
+	vect_push_string(&out->text, "\tpop r11\n");
+	vect_push_string(&out->text, "\tpop r10\n");
+	vect_push_string(&out->text, "\tpop r9\n");
+	vect_push_string(&out->text, "\tpop r8\n");
+	vect_push_string(&out->text, "\tpop rbp ; scope end\n"); // restore stack frame
 }
 
 void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *pos) {
