@@ -804,7 +804,7 @@ void var_op_dereference(CompData *out, Variable *store, Variable *from) {
 		return;
 	}
 
-	if (from->location != 5) {
+	if (from->location < 1 || from->ptr_chain.count > 1) {
 		// Generate initial move (from -> rsi)
 		vect_push_string(&out->text, "\tmov rsi, ");
 		if (from->location == LOC_DATA || from->location == LOC_STCK)
@@ -812,6 +812,8 @@ void var_op_dereference(CompData *out, Variable *store, Variable *from) {
 		
 		vect_push_free_string(&out->text, _op_get_location(from));
 		vect_push_string(&out->text, "; Move for dereference\n");
+		// Location -> rsi
+		store->location = 5;
 	}
 	
 	if (from->location == LOC_LITL)
@@ -823,13 +825,10 @@ void var_op_dereference(CompData *out, Variable *store, Variable *from) {
 		vect_push_string(&out->text, "\tmov rsi, [rsi] ; Dereference\n");
 		vect_pop(&store->ptr_chain);
 	}
-	vect_push_string(&out->text, "\n");
 
 	// pointer type -> ref
 	current = vect_get(&store->ptr_chain, store->ptr_chain.count - 1);
 	*current = PTYPE_REF;
-	// Location -> rsi (5)
-	store->location = 5;
 }
 
 // Index into an array by "index" elements.  Store the reference to the value in "store".
@@ -3479,6 +3478,12 @@ Variable scope_new_var(Scope *s, Type *t) {
 Variable scope_move_to_stack(Scope *s, Variable *v) {
 }
 
+void scope_setup(Scope *s, CompData *out) {
+}
+
+void scope_cleanup(Scope *s, CompData *out) {
+}
+
 // TODO: Scope ops like sub-scoping, variable management
 // conditional handling, data-section parts for function
 // literals, etc.
@@ -3594,11 +3599,14 @@ int op_order(Token *t) {
 }
 
 // Strict eval for top-level definitions
-void eval_strict() {
+Vector eval_strict() {
+	Vector out = vect_init(sizeof(int));
+	// TODO
+	return out;
 }
 
 Variable _eval_call() {
-
+	
 }
 
 Variable _eval_dot() {
@@ -3646,20 +3654,38 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 		int dcl = tnsl_find_closing(tokens, delim);
 		switch (d->data[0]){
 			case '(':
+				if(delim > start) {
+					return _eval_call();
+				} else if (dcl < end - 1) {
+					d = vect_get(tokens, dcl);
+					printf("Unexpected token after parenthesis \"%s\" (%d:%d)\n\n", d->data, d->line, d->col);
+					return out;
+				} else {
+					return _eval(s, data, tokens, start + 1, end - 1, tmp);
+				}
 			case '[':
+				printf("Explicit type casts are not yet supported, sorry (%d:%d)\n\n", d->line, d->col);
+				return out;
 			case '{':
 				if (delim > start || dcl < end - 1) {
-					
+					// Invalid
+					p2_error = true;
+					printf("Unexpected composite value (%d:%d)\n\n", d->line, d->col);
+					return out;
 				}
+				return _eval_composite();
 			case '/':
+				printf("Anonymous blocks as values are not yet supported, sorry (%d:%d)\n\n", d->line, d->col);
 			default:
 				p2_error = true;
+				return out;
 		}
 	}
 	
 	Token *op_token = vect_get(tokens, op_pos);
 
 	// Based on op_token, split the two halves and recurse.
+	// TODO
 
 	return out;
 }
