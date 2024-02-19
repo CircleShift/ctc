@@ -300,9 +300,10 @@ void cdat_add(CompData *a, CompData *b) {
 }
 
 void cdat_write_to_file(CompData *cdat, FILE *fout) {
+	fprintf(fout, "bits 64\n");
 	fprintf(fout, "\n%s\n", vect_as_string(&(cdat->header)));
-	fprintf(fout, "%s\n", vect_as_string(&(cdat->data)));
-	fprintf(fout, "%s\n", vect_as_string(&(cdat->text)));
+	fprintf(fout, "section .data\n%s\n", vect_as_string(&(cdat->data)));
+	fprintf(fout, "section .text\n%s\n", vect_as_string(&(cdat->text)));
 	fflush(fout);
 }
 
@@ -698,7 +699,7 @@ char *_op_get_register(int reg, int size) {
 			break;
 	}
 
-	return out.data;
+	return vect_as_string(&out);
 }
 
 int _var_size(Variable *var) {
@@ -1917,9 +1918,10 @@ char *mod_full_path(Module *m) {
 char *mod_label_prefix(Module *m) {
 	Vector out = vect_from_string("");
 	
-	while (m != NULL) {
+	while (m->parent != NULL) {
 		vect_push_string(&out, m->name);
 		vect_push_string(&out, ".");
+		m = m->parent;
 	}
 
 	return vect_as_string(&out);
@@ -3617,17 +3619,38 @@ Variable _eval_composite() {
 
 }
 
+Variable _eval_literal(Scope *s, CompData *data, Vector *tokens, size_t literal) {
+	Variable out = var_init("#literal", NULL);
+	Token *t = vect_get(tokens, literal);
+	
+	if (t->data[0] == '"') {
+		// handle str
+	} else {
+		out.location = LOC_LITL;
+		if (t->data[0] == '\'')
+			out.offset = tnsl_unquote_char(t->data + 1);
+		else
+			out.offset = tnsl_parse_number(t);
+	}
+	return out;
+}
+
 // Main implementation, recursive
 Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t end, Variable *tmp) {
 	Variable out;
 	out.name = NULL;
+
+	Token *t = vect_get(tokens, start);
+	if (start == end - 1 && t->type == TT_LITERAL) {
+		return _eval_literal(s, data, tokens, start);
+	} 
 
 	int op = -1;
 	int op_pos = 0;
 	int delim = -1;
 
 	for(size_t i = start; i < end; i++) {
-		Token *t = vect_get(tokens, i);
+		t = vect_get(tokens, i);
 		if (t->type == TT_DELIMIT) {
 			if(delim < 0) {
 				delim = i;
@@ -3686,6 +3709,38 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 
 	// Based on op_token, split the two halves and recurse.
 	// TODO
+	
+	Variable a = _eval(s, data, tokens, start, op_pos, tmp);
+	Variable b = _eval(s, data, tokens, op_pos + 1, end, tmp);
+
+	if (strlen(op_token->data) == 1) {
+		switch(op_token->data[0]) {
+		case '+':
+			var_op_add(data, &a, &b);
+			break;
+		case '-':
+			var_op_sub(data, &a, &b);
+			break;
+		case '*':
+			var_op_mul(data, &a, &b);
+			break;
+		case '/':
+			var_op_div(data, &a, &b);
+			break;
+		case '%':
+			var_op_mod(data, &a, &b);
+			break;
+		case '|':
+			var_op_or(data, &a, &b);
+			break;
+		case '&':
+			var_op_and(data, &a, &b);
+			break;
+		case '^':
+			var_op_xor(data, &a, &b);
+			break;
+		}
+	}
 
 	return out;
 }
@@ -3768,15 +3823,23 @@ void _p2_handle_method_scope(Module *root, CompData *out, Scope *fs) {
 void _p2_func_scope_init(Module *root, CompData *out, Scope *fs) {
 	// TODO: decide what happens when a function scope is created
 	
+	// export function if module is exported.
+	Vector tmp = _scope_base_label(fs);
+	if (root->exported) {
+		vect_push_string(&out->header, "global ");
+		vect_push_string(&out->header, vect_as_string(&tmp));
+		vect_push_string(&out->header, "\n");
+	}
+
 	// put the label
-	
+	vect_push_free_string(&out->text, vect_as_string(&tmp));
+	vect_push_string(&out->text, ":\n");
+
 	// Update stack pointers
 	vect_push_string(&out->text, "\tpush rbp\n");
 	vect_push_string(&out->text, "\tlea rbp, [rsp + 8]\n");
 	
 	// Push registers to save callee variables (subject to ABI change)
-	vect_push_string(&out->text, "\tpush r8\n");
-	vect_push_string(&out->text, "\tpush r9\n");
 	vect_push_string(&out->text, "\tpush r10\n");
 	vect_push_string(&out->text, "\tpush r11\n");
 	vect_push_string(&out->text, "\tpush r12\n");
@@ -3792,16 +3855,16 @@ void _p2_func_scope_end(CompData *out, Scope *fs) {
 	// TODO: Revert state of system to what it was before the function was called
 	
 	
-
+	vect_push_string(&out->text, "\tlea rsp, [rbp - 56]\n");
 	vect_push_string(&out->text, "\tpop r15\n");
 	vect_push_string(&out->text, "\tpop r14\n");
 	vect_push_string(&out->text, "\tpop r13\n");
 	vect_push_string(&out->text, "\tpop r12\n");
 	vect_push_string(&out->text, "\tpop r11\n");
 	vect_push_string(&out->text, "\tpop r10\n");
-	vect_push_string(&out->text, "\tpop r9\n");
-	vect_push_string(&out->text, "\tpop r8\n");
-	vect_push_string(&out->text, "\tpop rbp ; scope end\n"); // restore stack frame
+	vect_push_string(&out->text, "\tpop rbp\n"); // restore stack frame
+	vect_push_string(&out->text, "\tret ; Scope end\n");
+
 }
 
 void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *pos) {
@@ -3826,7 +3889,7 @@ void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *po
 	}
 
 	if(t == NULL || t->type != TT_DEFWORD) {
-		printf("ERROR: Could not user defined name for function \"%s\" (%d:%d)\n\n", start->data, start->line, start->col);
+		printf("ERROR: Could not find user defined name for function \"%s\" (%d:%d)\n\n", start->data, start->line, start->col);
 		p2_error = true;
 		return;
 	}
@@ -3838,20 +3901,23 @@ void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *po
 
 	// Scope init
 	Scope fs = scope_init(t->data, root);
+	_p2_func_scope_init(root, out, &fs);
 	if(root->name[0] == '@') {
 		_p2_handle_method_scope(root, out, &fs);
 	}
-	_p2_func_scope_init(root, out, &fs);
 
 	while(*pos < (size_t)end) {
 		t = vect_get(tokens, *pos);
 		if(tok_str_eq(t, "\n"))
 			break;
+		else if (t->type == TT_DELIMIT)
+			*pos = tnsl_find_closing(tokens, *pos);
 		*pos += 1;
 	}
 
-	for(*pos += 1; *pos < (size_t)end; *pos += 1) {
-		t = vect_get(tokens, ++(*pos));
+	*pos = tnsl_next_non_nl(tokens, *pos);
+	for (; *pos < (size_t)end; *pos = tnsl_next_non_nl(tokens, *pos)) {
+		t = vect_get(tokens, *pos);
 		if (tok_str_eq(t, "/;") || tok_str_eq(t, ";;")) {
 			size_t b_open = *pos;
 			
@@ -3872,9 +3938,11 @@ void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *po
 			if(tok_str_eq(t, "return")) {
 				t = vect_get(tokens, *pos + 1);
 				if (f->outputs.count > 0) {
-					if (*pos + 1 < end && !tok_str_eq(t, "\n"))
-						eval(&fs, out, tokens, pos + 1, true);
-					else {
+					if (*pos + 1 < end && !tok_str_eq(t, "\n")) {
+						*pos += 1;
+						Variable e = eval(&fs, out, tokens, pos, true);
+						var_end(&e);
+					} else {
 						t = vect_get(tokens, *pos);
 						printf("ERROR: Attempt to return from a function without a value, but the function requires one (%d:%d)", t->line, t->col);
 						p2_error = true;
@@ -3882,6 +3950,8 @@ void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *po
 				}
 				_p2_func_scope_end(out, &fs);
 				*pos = end;
+				scope_end(&fs);
+				return;
 			} else if (tok_str_eq(t, "asm")) {
 				t = vect_get(tokens, ++(*pos));
 				if(t->type != TT_LITERAL || t->data[0] != '"') {
@@ -3889,8 +3959,9 @@ void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *po
 					p2_error = true;
 				} else {
 					char *m = tnsl_unquote_str(t->data);
+					vect_push_string(&out->text, "\t");
 					vect_push_string(&out->text, m);
-					vect_push_string(&out->text, "\n");
+					vect_push_string(&out->text, "; User insert asm\n");
 					free(m);
 				}
 			}
@@ -3899,10 +3970,17 @@ void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *po
 		} else {
 			// TODO: figure out eval parameter needs (maybe needs start and end size_t?)
 			// and how eval will play into top level defs (if at all)
-			eval(&fs, out, tokens, pos, false);
+			Variable e = eval(&fs, out, tokens, pos, false);
+			var_end(&e);
 		}
 	}
 	
+	if (f->outputs.count > 0) {
+		printf("ERROR: Expected return value for function (%d:%d)\n\n", t->line, t->col);
+		p2_error = true;
+	}
+
+	_p2_func_scope_end(out, &fs);
 	scope_end(&fs);
 	*pos = end;
 }
