@@ -807,7 +807,11 @@ void var_op_dereference(CompData *out, Variable *store, Variable *from) {
 
 	if (from->location < 1 || from->ptr_chain.count > 1) {
 		// Generate initial move (from -> rsi)
-		vect_push_string(&out->text, "\tmov rsi, ");
+		if (_var_ptr_type(from) > 0)
+			vect_push_string(&out->text, "\tlea rsi, ");
+		else
+			vect_push_string(&out->text, "\tmov rsi, ");
+
 		if (from->location == LOC_DATA || from->location == LOC_STCK)
 			vect_push_string(&out->text, PREFIXES[7]);
 		
