@@ -2632,12 +2632,12 @@ char tnsl_unquote_char(char *str) {
 	return str[0];
 }
 
-char *tnsl_unquote_str(char *literal) {
+Vector tnsl_unquote_str(char *literal) {
 	int len = strlen(literal);
-	if (len < 2)
-		return NULL;
-
 	Vector str_out = vect_init(sizeof(char));
+	if (len < 2)
+		return str_out;
+
 	char end = literal[0];
 	for(int i = 1; i < len; i++) {
 		if(literal[i] == end)
@@ -2650,7 +2650,7 @@ char *tnsl_unquote_str(char *literal) {
 			vect_push(&str_out, literal + i);
 	}
 
-	return str_out.data;
+	return str_out;
 }
 
 int tnsl_block_type(Vector *tokens, size_t cur) {
@@ -3397,6 +3397,7 @@ typedef struct Scope {
 	Module *current;
 	Vector vars;
 	struct Scope *parent;
+	int next_const;
 } Scope;
 
 Scope scope_init(char *name, Module *mod) {
@@ -3407,6 +3408,8 @@ Scope scope_init(char *name, Module *mod) {
 
 	out.vars = vect_init(sizeof(Variable));
 	out.current = mod;
+
+	out.next_const = 0;
 
 	return out;
 }
@@ -3464,6 +3467,14 @@ char *scope_label_end(Scope *s) {
 
 // Temp variable gen
 Variable scope_gen_tmp(Scope *s) {
+}
+
+char *scope_gen_const_label(Scope *s) {
+	Vector out = _scope_base_label(s);
+	vect_push_string(&out, "#const");
+	vect_push_free_string(&out, int_to_str(s->next_const));
+	s->next_const++;
+	return vect_as_string(&out);
 }
 
 void scope_release_tmp(Scope *s, Variable *v) {
@@ -3625,6 +3636,33 @@ Variable _eval_literal(Scope *s, CompData *data, Vector *tokens, size_t literal)
 	
 	if (t->data[0] == '"') {
 		// handle str
+		Vector str_dat = tnsl_unquote_str(t->data);
+		char *label = scope_gen_const_label(s);
+		
+		vect_push_string(&data->data, label);
+		vect_push_string(&data->data, ":\n\tdq ");
+		vect_push_free_string(&data->data, int_to_str(str_dat.count));
+		
+		if (str_dat.count > 0)
+			vect_push_string(&data->data, "\n\tdb ");
+
+		for (size_t i = 0; i < str_dat.count; i++) {
+			char *ch = vect_get(&str_dat, i);
+			vect_push_free_string(&data->data, int_to_str(*ch));
+			if (i < str_dat.count - 1) {
+				vect_push_string(&data->data, ", ");
+			}
+		}
+		vect_push_string(&data->data, "\n\n");
+		vect_end(&str_dat);
+		var_end(&out);
+
+		out = var_init(label, typ_get_inbuilt("uint8"));
+		out.location = LOC_DATA;
+		free(label);
+		int arr_t = str_dat.count;
+		vect_push(&out.ptr_chain, &arr_t);
+
 	} else {
 		out.location = LOC_LITL;
 		if (t->data[0] == '\'')
@@ -3958,11 +3996,11 @@ void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *po
 					printf("ERROR: Expected string literal after asm keyword (%d:%d)\n", t->line, t->col);
 					p2_error = true;
 				} else {
-					char *m = tnsl_unquote_str(t->data);
+					Vector asm_str = tnsl_unquote_str(t->data);
 					vect_push_string(&out->text, "\t");
-					vect_push_string(&out->text, m);
+					vect_push_string(&out->text, vect_as_string(&asm_str));
 					vect_push_string(&out->text, "; User insert asm\n");
-					free(m);
+					vect_end(&asm_str);
 				}
 			}
 		} else if (tnsl_is_def(tokens, *pos)) {
@@ -4198,12 +4236,12 @@ void p2_file_loop(
 			start++;
 			t = vect_get(tokens, start);
 			if(t != NULL && t->type == TT_LITERAL) {
-				char *push = tnsl_unquote_str(t->data);
-				if (push != NULL) {
-					vect_push_string(&out->header, push);
+				Vector asm_str = tnsl_unquote_str(t->data);
+				if (asm_str.count > 0) {
+					vect_push_string(&out->header, vect_as_string(&asm_str));
 					vect_push_string(&out->header, "\n");
-					free(push);
 				}
+				vect_end(&asm_str);
 			}
 		}
 	}
