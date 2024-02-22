@@ -3678,7 +3678,7 @@ Variable _eval_literal(Scope *s, CompData *data, Vector *tokens, size_t literal)
 }
 
 // Main implementation, recursive
-Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t end, Variable *tmp) {
+Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t end) {
 	Variable out;
 	out.name = NULL;
 
@@ -3714,7 +3714,12 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 	// Found first delim and lowest priority op
 	
 	// Handle delim
-	if (delim > -1 && op < 2){
+	if (op < 2){
+		if (delim == -1) {
+			return _eval_dot(s, data, tokens, start, end);
+		}
+		
+		// Handle delim
 		Token *d = vect_get(tokens, delim);
 		int dcl = tnsl_find_closing(tokens, delim);
 		switch (d->data[0]){
@@ -3726,7 +3731,7 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 					printf("Unexpected token after parenthesis \"%s\" (%d:%d)\n\n", d->data, d->line, d->col);
 					return out;
 				} else {
-					return _eval(s, data, tokens, start + 1, end - 1, tmp);
+					return _eval(s, data, tokens, start + 1, end - 1);
 				}
 			case '[':
 				printf("Explicit type casts are not yet supported, sorry (%d:%d)\n\n", d->line, d->col);
@@ -3752,36 +3757,46 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 	// Based on op_token, split the two halves and recurse.
 	// TODO
 	
-	Variable a = _eval(s, data, tokens, start, op_pos, tmp);
-	Variable b = _eval(s, data, tokens, op_pos + 1, end, tmp);
+	Variable rhs = _eval(s, data, tokens, op_pos + 1, end);
+	out = _eval(s, data, tokens, start, op_pos);
+	if (op != 10 && !scope_is_tmp(&out)) {
+		out = scope_mk_tmp(&out);
+	}
 
 	if (strlen(op_token->data) == 1) {
 		switch(op_token->data[0]) {
 		case '+':
-			var_op_add(data, &a, &b);
+			var_op_add(data, &out, &rhs);
 			break;
 		case '-':
-			var_op_sub(data, &a, &b);
+			var_op_sub(data, &out, &rhs);
 			break;
 		case '*':
-			var_op_mul(data, &a, &b);
+			var_op_mul(data, &out, &rhs);
 			break;
 		case '/':
-			var_op_div(data, &a, &b);
+			var_op_div(data, &out, &rhs);
 			break;
 		case '%':
-			var_op_mod(data, &a, &b);
+			var_op_mod(data, &out, &rhs);
 			break;
 		case '|':
-			var_op_or(data, &a, &b);
+			var_op_or(data, &out, &rhs);
 			break;
 		case '&':
-			var_op_and(data, &a, &b);
+			var_op_and(data, &out, &rhs);
 			break;
 		case '^':
-			var_op_xor(data, &a, &b);
+			var_op_xor(data, &out, &rhs);
+			break;
+		case '=':
+			var_op_set(data, &out, &rhs);
 			break;
 		}
+	}
+
+	if (scope_is_tmp(&rhs)) {
+		scope_free_tmp(&rhs);
 	}
 
 	return out;
@@ -3807,7 +3822,7 @@ Variable eval(Scope *s, CompData *out, Vector *tokens, size_t *pos, bool keep) {
 		}
 	}
 
-	store = _eval(s, out, tokens, start, end, NULL);
+	store = _eval(s, out, tokens, start, end);
 	
 	if (keep) {
 		if(store.location == LOC_STCK || store.location == LOC_DATA) {
