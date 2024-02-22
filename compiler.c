@@ -3399,7 +3399,7 @@ void phase_1(Artifact *path, Module *root) {
 typedef struct Scope {
 	char *name;
 	Module *current;
-	Vector vars;
+	Vector stack_vars, reg_vars;
 	struct Scope *parent;
 	int next_const;
 } Scope;
@@ -3410,7 +3410,8 @@ Scope scope_init(char *name, Module *mod) {
 	Vector cpy = vect_from_string(name);
 	out.name = vect_as_string(&cpy);
 
-	out.vars = vect_init(sizeof(Variable));
+	out.stack_vars = vect_init(sizeof(Variable));
+	out.reg_vars = vect_init(sizeof(Variable));
 	out.current = mod;
 
 	out.next_const = 0;
@@ -3421,11 +3422,17 @@ Scope scope_init(char *name, Module *mod) {
 void scope_end(Scope *s) {
 	free(s->name);
 	
-	for(size_t i = 0; i < s->vars.count; i++) {
-		Variable *v = vect_get(&s->vars, i);
+	for(size_t i = 0; i < s->stack_vars.count; i++) {
+		Variable *v = vect_get(&s->stack_vars, i);
 		var_end(v);
 	}
-	vect_end(&s->vars);
+	vect_end(&s->stack_vars);
+
+	for(size_t i = 0; i < s->reg_vars.count; i++) {
+		Variable *v = vect_get(&s->reg_vars, i);
+		var_end(v);
+	}
+	vect_end(&s->reg_vars);
 }
 
 // Label generation
@@ -3469,10 +3476,6 @@ char *scope_label_end(Scope *s) {
 	return vect_as_string(&out);
 }
 
-// Temp variable gen
-Variable scope_gen_tmp(Scope *s) {
-}
-
 char *scope_gen_const_label(Scope *s) {
 	Vector out = _scope_base_label(s);
 	vect_push_string(&out, "#const");
@@ -3481,25 +3484,38 @@ char *scope_gen_const_label(Scope *s) {
 	return vect_as_string(&out);
 }
 
-void scope_release_tmp(Scope *s, Variable *v) {
-}
 
 // Sub scopes
 Scope scope_subscope(Scope *s, char *name) {
+	Scope out = scope_init(name, s->current);
+	out.parent = s;
+	return out;
 }
 
 // Scope variable creation and management
-Variable scope_new_var(Scope *s, Type *t) {
+
+// Creates a new tmp variable from an existing variable 
+Variable scope_mk_tmp(Variable *v) {
+	return *v;
 }
 
-Variable scope_move_to_stack(Scope *s, Variable *v) {
+// Checks if a variable is a tmp variable in the scope
+bool scope_is_tmp(Variable *v) {
+	return false;
 }
 
-void scope_setup(Scope *s, CompData *out) {
+// Free a tmp variable in the scope
+void scope_free_tmp(Variable *v) {
 }
 
-void scope_cleanup(Scope *s, CompData *out) {
+void scope_mk_var(Scope *s, Variable *v) {
 }
+
+// Get a variable from the scope
+Variable scope_get_var(Scope *s, char *name) {
+	
+}
+
 
 // TODO: Scope ops like sub-scoping, variable management
 // conditional handling, data-section parts for function
@@ -3626,8 +3642,14 @@ Variable _eval_call() {
 	
 }
 
-Variable _eval_dot() {
-
+Variable _eval_dot(Scope *s, CompData *data, Vector *tokens, size_t start, size_t end) {
+	if (start == end - 1) {
+		Token *t = vect_get(tokens, start);
+		return scope_get_var(s, t->data);
+	}
+	
+	Variable v;
+	return v;
 }
 
 Variable _eval_composite() {
@@ -3837,9 +3859,46 @@ Variable eval(Scope *s, CompData *out, Vector *tokens, size_t *pos, bool keep) {
 	return store;
 }
 
-// TODO determine weather to break this into two functions (one for inside functions, one for top-level)
-Variable p2_compile_def(Scope *s, CompData *out, Vector *tokens, size_t *pos) {
-	return eval(s, out, tokens, pos, false);
+// Compiles a variable definition inside a function block
+void p2_compile_def(Scope *s, CompData *out, Vector *tokens, size_t *pos) {
+
+	Variable type = tnsl_parse_type(tokens, *pos);
+	*pos = type.location;
+
+	Artifact t_art = art_from_str(type.name, '.');
+	type.type = mod_find_type(s->current, &t_art);
+	art_end(&t_art);
+
+	size_t start = *pos;
+	while (*pos < tokens->count && !tok_str_eq(vect_get(tokens, *pos), "\n")) {
+		Token *t = vect_get(tokens, *pos);
+		
+		if (start == *pos) {
+			if (t->type == TT_DEFWORD) {
+				// Define new scope var
+				free(type.name);
+				Vector nm = vect_from_string(t->data);
+				type.name = vect_as_string(&nm);
+				scope_mk_var(s, &type);
+			} else {
+				printf("ERROR: Expected variable name, got \"%s\" (%d:%d\n\n", t->data, t->line, t->col);
+				p2_error = true;
+				return;
+			}
+		} else if (t->type == TT_DELIMIT) {
+			*pos = tnsl_find_closing(tokens, *pos);
+		} else if (tok_str_eq(t, ",")) {
+			// Split def
+			Variable store = _eval(s, out, tokens, start, *pos);
+			var_end(&store);
+			start = *pos + 1;
+		}
+		*pos += 1;
+	}
+
+	var_end(&type);
+	Variable store = _eval(s, out, tokens, start, *pos);
+	var_end(&store);
 }
 
 // TODO (depends on top-level defs working)
