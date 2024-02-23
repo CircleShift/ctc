@@ -3889,16 +3889,20 @@ void p2_compile_def(Scope *s, CompData *out, Vector *tokens, size_t *pos) {
 			*pos = tnsl_find_closing(tokens, *pos);
 		} else if (tok_str_eq(t, ",")) {
 			// Split def
-			Variable store = _eval(s, out, tokens, start, *pos);
-			var_end(&store);
+			if(*pos - start > 1) {
+				Variable store = _eval(s, out, tokens, start, *pos);
+				var_end(&store);
+			}
 			start = *pos + 1;
 		}
 		*pos += 1;
 	}
 
 	var_end(&type);
-	Variable store = _eval(s, out, tokens, start, *pos);
-	var_end(&store);
+	if (*pos - start > 1) {
+		Variable store = _eval(s, out, tokens, start, *pos);
+		var_end(&store);
+	}
 }
 
 // TODO (depends on top-level defs working)
