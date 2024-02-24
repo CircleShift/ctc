@@ -3552,8 +3552,13 @@ int _scope_avail_reg(Scope *s) {
 }
 
 // Creates a new tmp variable from an existing variable 
-Variable scope_mk_tmp(Variable *v) {
-	return *v;
+Variable scope_mk_tmp(Scope *s, Variable *v) {
+	Variable out = var_copy(v);
+	if (is_inbuilt(v->type->name) || _var_ptr_type(v) < 1) {
+		int regs = _scope_avail_reg(s);
+	}
+	// TODO
+	return out;
 }
 
 // Checks if a variable is a tmp variable in the scope
@@ -3839,7 +3844,7 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 	Variable rhs = _eval(s, data, tokens, op_pos + 1, end);
 	out = _eval(s, data, tokens, start, op_pos);
 	if (op != 10 && !scope_is_tmp(&out)) {
-		out = scope_mk_tmp(&out);
+		out = scope_mk_tmp(s, &out);
 	}
 
 	if (strlen(op_token->data) == 1) {
