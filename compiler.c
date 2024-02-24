@@ -754,7 +754,7 @@ char *_op_get_location(Variable *var) {
 		out = int_to_str(var->offset);
 	} else if(var->location == LOC_STCK) {
 		// Invert because stack grows down (and stack index starts at 1)
-		out = _gen_address("", "rsp", "", 0, var->offset, false);
+		out = _gen_address("", "rbp", "", 0, -var->offset, false);
 	} else if (var->location == LOC_DATA) {
 		// Stored in data sec
 		char *name = _var_get_datalabel(var);
@@ -1097,7 +1097,7 @@ char *_var_get_store(CompData *out, Variable *store) {
 		return _gen_address(PREFIXES[_var_size(store) - 1], name, "", 0, 0, true);
 		free(name);
 	} else if (store->location < 0) {
-		return _gen_address(PREFIXES[_var_size(store) - 1], "rsp", "", 0, -(store->location + 1), false);
+		return _gen_address(PREFIXES[_var_size(store) - 1], "rbp", "", 0, -store->offset, false);
 	} else {
 		return _op_get_location(store);
 	}
@@ -1155,7 +1155,7 @@ char *_var_get_from(CompData *out, Variable *store, Variable *from) {
 		free(name);
 	} else {
 		// from on stack
-		mov_from = _gen_address(PREFIXES[_var_size(from) - 1], "rsp", "", 0, -(from->location + 1), false);
+		mov_from = _gen_address(PREFIXES[_var_size(from) - 1], "rbp", "", 0, -from->offset, false);
 	}
 
 	// Match sign of data if required.
@@ -3493,6 +3493,63 @@ Scope scope_subscope(Scope *s, char *name) {
 }
 
 // Scope variable creation and management
+
+int _scope_next_stack_loc(Scope *s) {
+	int sum = 0;
+	
+	if (s->parent != NULL)
+		sum += _scope_next_stack_loc(s->parent);
+	else
+		sum += 56;
+
+	for (size_t i = 0; i < s->stack_vars.count; i++) {
+		Variable *v = vect_get(&s->stack_vars, i);
+		if (_var_ptr_type(v) > 1) {
+			// TODO: Multi dimensional arrays
+			sum += 8;
+			sum += v->type->size * _var_ptr_type(v);
+		} else {
+			sum += _var_pure_size(v);
+		}
+	}
+
+	return sum;
+}
+
+// Tmp reg masks
+#define RMSK_B 0b001
+#define RMSK_8 0b010
+#define RMSK_9 0b100
+
+// Main reg masks
+#define RMSK_10 0b000001000
+#define RMSK_11 0b000010000
+#define RMSK_12 0b000100000
+#define RMSK_13 0b001000000
+#define RMSK_14 0b010000000
+#define RMSK_15 0b100000000
+
+int _scope_avail_reg(Scope *s) {
+	int mask = 0b111111111;
+	if (s->parent != NULL) {
+		mask = _scope_avail_reg(s->parent);
+	}
+
+	for (size_t i = 0; i < s->reg_vars.count; i++) {
+		Variable *v = vect_get(&s->reg_vars, i);
+		int vmask = 0;
+		
+		if (v->location == 2) {
+			vmask = RMSK_B;
+		} else if (v->location > 8) {
+			vmask = 0b1 << (v->location - 8);
+		}
+
+		mask = mask & !(vmask);
+	}
+
+	return mask;
+}
 
 // Creates a new tmp variable from an existing variable 
 Variable scope_mk_tmp(Variable *v) {
