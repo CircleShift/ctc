@@ -3585,8 +3585,19 @@ bool scope_is_tmp(Variable *v) {
 	return strcmp(v->name, "#tmp") == 0;
 }
 
+
+void _scope_free_tmp_reg(Scope *s, Variable *v) {
+}
+
+void _scope_free_tmp_stack(Scope *s, CompData *data, Variable *v) {
+}
+
 // Free a tmp variable in the scope
-void scope_free_tmp(Variable *v) {
+void scope_free_tmp(Scope *s, CompData *data, Variable *v) {
+	if (v->location > 0) {
+		_scope_free_tmp_reg(s, v);
+	}
+	_scope_free_tmp_stack(s, data, v);
 }
 
 void scope_mk_var(Scope *s, CompData *data, Variable *v) {
@@ -3613,8 +3624,6 @@ void scope_mk_var(Scope *s, CompData *data, Variable *v) {
 
 			out.offset = 0;
 
-			var_op_pure_set(data, &out, v);
-
 			vect_push(&s->reg_vars, &out);
 		}
 	}
@@ -3623,12 +3632,31 @@ void scope_mk_var(Scope *s, CompData *data, Variable *v) {
 	vect_push(&s->stack_vars, &out);
 }
 
-Variable _scope_check_reg(Scope *s, char *name) {
+Variable _scope_check_vars(Scope *s, char *name) {
+	for (size_t i = 0; i < s->reg_vars.count; i++) {
+		Variable *v = vect_get(&s->reg_vars, i);
+		if (strcmp(v->name, name) == 0)
+			return var_copy(v);
+	}
+
+	for (size_t i = 0; i < s->stack_vars.count; i++) {
+		Variable *v = vect_get(&s->stack_vars, i);
+		if (strcmp(v->name, name) == 0)
+			return var_copy(v);
+	}
+
+	if (s->parent == NULL) {
+		Variable out = {0};
+		out.name = NULL;
+		return out;
+	}
+
+	return _scope_check_vars(s->parent, name);
 }
 
 // Get a variable from the scope
 Variable scope_get_var(Scope *s, char *name) {
-	Variable out = _scope_check_reg(s, name);
+	Variable out = _scope_check_vars(s, name);
 
 	if (out.name != NULL)
 		return out;
@@ -3940,7 +3968,7 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 	}
 
 	if (scope_is_tmp(&rhs)) {
-		scope_free_tmp(&rhs);
+		scope_free_tmp(s, data, &rhs);
 	}
 
 	return out;
