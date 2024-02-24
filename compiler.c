@@ -3494,22 +3494,16 @@ Scope scope_subscope(Scope *s, char *name) {
 
 // Scope variable creation and management
 
-int _scope_next_stack_loc(Scope *s) {
-	int sum = 0;
+int _scope_next_stack_loc(Scope *s, int size) {
+	int sum = 56 + size;
 	
 	if (s->parent != NULL)
-		sum += _scope_next_stack_loc(s->parent);
-	else
-		sum += 56;
+		sum = _scope_next_stack_loc(s->parent, size);
 
 	for (size_t i = 0; i < s->stack_vars.count; i++) {
 		Variable *v = vect_get(&s->stack_vars, i);
-		if (_var_ptr_type(v) > 1) {
-			// TODO: Multi dimensional arrays
-			sum += 8;
-			sum += v->type->size * _var_ptr_type(v);
-		} else {
-			sum += _var_pure_size(v);
+		if (v->offset + size > sum) {
+			sum = v->offset + size;
 		}
 	}
 
@@ -3529,6 +3523,7 @@ int _scope_next_stack_loc(Scope *s) {
 #define RMSK_14 0b010000000
 #define RMSK_15 0b100000000
 
+// Generate a bitmask representing available registers
 int _scope_avail_reg(Scope *s) {
 	int mask = 0b111111111;
 	if (s->parent != NULL) {
@@ -3552,30 +3547,95 @@ int _scope_avail_reg(Scope *s) {
 }
 
 // Creates a new tmp variable from an existing variable 
-Variable scope_mk_tmp(Scope *s, Variable *v) {
+Variable scope_mk_tmp(Scope *s, CompData *data, Variable *v) {
 	Variable out = var_copy(v);
-	if (is_inbuilt(v->type->name) || _var_ptr_type(v) < 1) {
+	int p_typ = _var_ptr_type(v);
+
+	free(out.name);
+	Vector nm = vect_from_string("#tmp");
+	out.name = vect_as_string(&nm);
+
+	if ((is_inbuilt(v->type->name) && p_typ < 1) || p_typ == PTYPE_PTR || p_typ == PTYPE_PTR) {
 		int regs = _scope_avail_reg(s);
+		if (regs & (RMSK_B | RMSK_8 | RMSK_9)) {
+			
+			if (regs & RMSK_B) {
+				out.location = 2;
+			} else if (regs & RMSK_8) {
+				out.location = 9;
+			} else if (regs & RMSK_9) {
+				out.location = 10;
+			}
+			out.offset = 0;
+
+			var_op_pure_set(data, &out, v);
+
+			vect_push(&s->reg_vars, &out);
+			return var_copy(&out);
+		}
 	}
-	// TODO
-	return out;
+
+	// TODO structs
+	vect_push(&s->stack_vars, &out);
+	return var_copy(&out);
 }
 
 // Checks if a variable is a tmp variable in the scope
 bool scope_is_tmp(Variable *v) {
-	return false;
+	return strcmp(v->name, "#tmp") == 0;
 }
 
 // Free a tmp variable in the scope
 void scope_free_tmp(Variable *v) {
 }
 
-void scope_mk_var(Scope *s, Variable *v) {
+void scope_mk_var(Scope *s, CompData *data, Variable *v) {
+	Variable out = var_copy(v);
+	int p_typ = _var_ptr_type(v);
+
+	if ((is_inbuilt(v->type->name) && p_typ < 1) || p_typ == PTYPE_PTR || p_typ == PTYPE_PTR) {
+		int regs = _scope_avail_reg(s);
+		if (regs > (RMSK_B & RMSK_8 & RMSK_9)) {
+			
+			if (regs & RMSK_10) {
+				out.location = 11;
+			} else if (regs & RMSK_11) {
+				out.location = 12;
+			} else if (regs & RMSK_12) {
+				out.location = 13;
+			} else if (regs & RMSK_13) {
+				out.location = 14;
+			} else if (regs & RMSK_14) {
+				out.location = 15;
+			} else if (regs & RMSK_15) {
+				out.location = 16;
+			}
+
+			out.offset = 0;
+
+			var_op_pure_set(data, &out, v);
+
+			vect_push(&s->reg_vars, &out);
+		}
+	}
+
+	// TODO structs
+	vect_push(&s->stack_vars, &out);
+}
+
+Variable _scope_check_reg(Scope *s, char *name) {
 }
 
 // Get a variable from the scope
 Variable scope_get_var(Scope *s, char *name) {
+	Variable out = _scope_check_reg(s, name);
+
+	if (out.name != NULL)
+		return out;
+
+	Artifact v_art = art_from_str(name, '.');
 	
+	art_end(&v_art);
 }
 
 
@@ -3844,7 +3904,7 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 	Variable rhs = _eval(s, data, tokens, op_pos + 1, end);
 	out = _eval(s, data, tokens, start, op_pos);
 	if (op != 10 && !scope_is_tmp(&out)) {
-		out = scope_mk_tmp(s, &out);
+		out = scope_mk_tmp(s, data, &out);
 	}
 
 	if (strlen(op_token->data) == 1) {
@@ -3941,7 +4001,7 @@ void p2_compile_def(Scope *s, CompData *out, Vector *tokens, size_t *pos) {
 				free(type.name);
 				Vector nm = vect_from_string(t->data);
 				type.name = vect_as_string(&nm);
-				scope_mk_var(s, &type);
+				scope_mk_var(s, out, &type);
 			} else {
 				printf("ERROR: Expected variable name, got \"%s\" (%d:%d\n\n", t->data, t->line, t->col);
 				p2_error = true;
