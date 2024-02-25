@@ -4109,10 +4109,21 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 				printf("Explicit type casts are not yet supported, sorry (%d:%d)\n\n", d->line, d->col);
 				return out;
 			case '{':
-				if (delim > start || dcl < end - 1) {
+				if (delim > start) {
+					// Index
+					Variable index = _eval(s, data, tokens, delim + 1, dcl);
+					Variable to_index = _eval(s, data, tokens, start, delim);
+					Variable store;
+					var_op_index(data, &store, &to_index, &index);
+					var_end(&index);
+					var_end(&to_index);
+					to_index = scope_mk_tmp(s, data, &store);
+					var_end(&store);
+					return to_index;
+				} else if (dcl < end - 1) {
 					// Invalid
 					p2_error = true;
-					printf("Unexpected composite value (%d:%d)\n\n", d->line, d->col);
+					printf("Unexpected tokens after composite value (%d:%d)\n\n", d->line, d->col);
 					return out;
 				}
 				return _eval_composite();
@@ -4140,7 +4151,9 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 	}
 	
 	if (op != 10 && !scope_is_tmp(&out) && out.location != LOC_LITL) {
-		out = scope_mk_tmp(s, data, &out);
+		Variable tmp = scope_mk_tmp(s, data, &out);
+		var_end(&out);
+		out = tmp;
 	}
 
 	if (strlen(op_token->data) == 1) {
