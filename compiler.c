@@ -3732,7 +3732,7 @@ void scope_free_all_tmp(Scope* s, CompData *data) {
 }
 
 // Generate a new variable in the scope
-void scope_mk_var(Scope *s, CompData *data, Variable *v) {
+Variable scope_mk_var(Scope *s, CompData *data, Variable *v) {
 	Variable out = var_copy(v);
 	int p_typ = _var_ptr_type(v);
 
@@ -3757,7 +3757,7 @@ void scope_mk_var(Scope *s, CompData *data, Variable *v) {
 			out.offset = 0;
 
 			vect_push(&s->reg_vars, &out);
-			return;
+			return var_copy(&out);
 		}
 	}
 
@@ -3771,6 +3771,7 @@ void scope_mk_var(Scope *s, CompData *data, Variable *v) {
 	vect_push_string(&data->text, "]; Stack variable\n");
 
 	vect_push(&s->stack_vars, &out);
+	return var_copy(&out);
 }
 
 Variable _scope_check_vars(Scope *s, char *name) {
@@ -4237,7 +4238,8 @@ void p2_compile_def(Scope *s, CompData *out, Vector *tokens, size_t *pos) {
 				free(type.name);
 				Vector nm = vect_from_string(t->data);
 				type.name = vect_as_string(&nm);
-				scope_mk_var(s, out, &type);
+				Variable tmp = scope_mk_var(s, out, &type);
+				var_end(&tmp);
 			} else {
 				printf("ERROR: Expected variable name, got \"%s\" (%d:%d\n\n", t->data, t->line, t->col);
 				p2_error = true;
@@ -4290,7 +4292,7 @@ void p2_compile_control(Scope *s, CompData *out, Vector *tokens, size_t *pos) {
 }
 
 // Handles the 'self' variable in the case where the function is in a method block.
-void _p2_handle_method_scope(Module *root, CompData *out, Scope *fs) {
+void _p2_handle_method_scope(Module *root, CompData *out, Scope *fs, Function *f) {
 	Artifact t_art = art_from_str((root->name + 1), '.');
 	Type *t = mod_find_type(root, &t_art);
 	art_end(&t_art);
@@ -4298,7 +4300,7 @@ void _p2_handle_method_scope(Module *root, CompData *out, Scope *fs) {
 	
 }
 
-void _p2_func_scope_init(Module *root, CompData *out, Scope *fs) {
+void _p2_func_scope_init(Module *root, CompData *out, Scope *fs, Function *f) {
 	// TODO: decide what happens when a function scope is created
 	
 	// export function if module is exported.
@@ -4325,13 +4327,17 @@ void _p2_func_scope_init(Module *root, CompData *out, Scope *fs) {
 	vect_push_string(&out->text, "\tpush r14\n");
 	vect_push_string(&out->text, "\tpush r15 ; scope init\n\n");
 
-	// Load function parameters into expected registers
-	
+	// Load function parameters into expected registers (we assume the stack frame was set up proprely by caller)
+	for (size_t i = 0; i < f->inputs.count; i++) {
+		Variable *input =  vect_get(&f->inputs, i);
+		Variable set = scope_mk_var(fs, out, input);
+		var_op_pure_set(out, &set, input);
+		var_end(&set);
+	}
 }
 
 void _p2_func_scope_end(CompData *out, Scope *fs) {
-	// TODO: Revert state of system to what it was before the function was called
-	
+	// No multi returns atm
 	
 	vect_push_string(&out->text, "\tlea rsp, [rbp - 56]\n");
 	vect_push_string(&out->text, "\tpop r15\n");
@@ -4379,9 +4385,9 @@ void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *po
 
 	// Scope init
 	Scope fs = scope_init(t->data, root);
-	_p2_func_scope_init(root, out, &fs);
+	_p2_func_scope_init(root, out, &fs, f);
 	if(root->name[0] == '@') {
-		_p2_handle_method_scope(root, out, &fs);
+		_p2_handle_method_scope(root, out, &fs, f);
 	}
 
 	while(*pos < (size_t)end) {
