@@ -754,7 +754,7 @@ char *_op_get_location(Variable *var) {
 		out = int_to_str(var->offset);
 	} else if(var->location == LOC_STCK) {
 		// Invert because stack grows down (and stack index starts at 1)
-		out = _gen_address("", "rbp", "", 0, -var->offset, false);
+		out = _gen_address("", "rbp", "", 0, var->offset, false);
 	} else if (var->location == LOC_DATA) {
 		// Stored in data sec
 		char *name = _var_get_datalabel(var);
@@ -1097,7 +1097,7 @@ char *_var_get_store(CompData *out, Variable *store) {
 		return _gen_address(PREFIXES[_var_size(store) - 1], name, "", 0, 0, true);
 		free(name);
 	} else if (store->location < 0) {
-		return _gen_address(PREFIXES[_var_size(store) - 1], "rbp", "", 0, -store->offset, false);
+		return _gen_address(PREFIXES[_var_size(store) - 1], "rbp", "", 0, store->offset, false);
 	} else {
 		return _op_get_location(store);
 	}
@@ -1155,7 +1155,7 @@ char *_var_get_from(CompData *out, Variable *store, Variable *from) {
 		free(name);
 	} else {
 		// from on stack
-		mov_from = _gen_address(PREFIXES[_var_size(from) - 1], "rbp", "", 0, -from->offset, false);
+		mov_from = _gen_address(PREFIXES[_var_size(from) - 1], "rbp", "", 0, from->offset, false);
 	}
 
 	// Match sign of data if required.
@@ -2409,6 +2409,11 @@ int tnsl_next_non_nl(Vector *tokens, size_t pos) {
 	return pos;
 }
 
+// Returns a variable which can be constructed into
+// a type.
+// name = fully qualified type name
+// location = next token after type
+// ptr_chain = full pointer chain of the type
 Variable tnsl_parse_type(Vector *tokens, size_t cur) {
 	Vector ftn = vect_init(sizeof(char));
 	Vector ptr = vect_init(sizeof(int));
@@ -3292,27 +3297,9 @@ void p1_size_type (Module *root, Type *t) {
 }
 
 void p1_resolve_func_types(Module *root, Function *func) {
-	for (size_t i = 0; i < func->outputs.count; i++) {
-		Variable *var = vect_get(&func->outputs, i);
-		Artifact rtn = art_from_str(var->name, '.');
-		Type *t = mod_find_type(root, &rtn);
 
-		if(t == NULL) {
-			char *rt = art_to_str(&rtn, '.');
-			printf("ERROR: Could not find type %s for function %s\n\n", rt, func->name);
-			free(rt);
-			art_end(&rtn);
-			break;
-		}
-
-		art_end(&rtn);
-
-		Vector name = vect_from_string(t->name);
-		free(var->name);
-		var->name = vect_as_string(&name);
-		var->type = t;
-	}
-
+	int reg = 1;
+	int stack_accum = 0;
 	for (size_t i = 0; i < func->inputs.count; i++) {
 		Variable *var = vect_get(&func->inputs, i);
 		char *n_end = strchr(var->name, ' ');
@@ -3341,6 +3328,77 @@ void p1_resolve_func_types(Module *root, Function *func) {
 		free(var->name);
 		var->name = vect_as_string(&name);
 		var->type = t;
+		
+		// Check where the input should be read from
+		if (
+				(
+					// is struct
+					!is_inbuilt(var->type->name)
+					&& // and not by reference
+					var->ptr_chain.count == 0
+				)
+				|| // or we are an array with predefined size (stack array)
+				_var_ptr_type(var) > 1
+				|| // or we ran out of registers
+				reg > 6
+			) {
+			// The output should be stored on the stack
+			var->location = LOC_STCK;
+			var->offset = stack_accum;
+			stack_accum += _var_pure_size(var);
+		} else {
+			// The output should be stored in a register
+			var->location = reg;
+			var->offset = 0;
+			reg++;
+		}
+	}
+	
+	reg = 1;
+	// Stack accum not reset because the stack would get clobbered
+	for (size_t i = 0; i < func->outputs.count; i++) {
+		Variable *var = vect_get(&func->outputs, i);
+		Artifact rtn = art_from_str(var->name, '.');
+		Type *t = mod_find_type(root, &rtn);
+
+		if(t == NULL) {
+			char *rt = art_to_str(&rtn, '.');
+			printf("ERROR: Could not find type %s for function %s\n\n", rt, func->name);
+			free(rt);
+			art_end(&rtn);
+			break;
+		}
+
+		art_end(&rtn);
+
+		Vector name = vect_from_string(t->name);
+		free(var->name);
+		var->name = vect_as_string(&name);
+		var->type = t;
+
+		// Check where the output should be stored
+		if (
+				(
+					// is struct
+					!is_inbuilt(var->type->name)
+					&& // and not by reference
+					var->ptr_chain.count == 0
+				)
+				|| // or we are an array with predefined size (stack array)
+				_var_ptr_type(var) > 1
+				|| // or we ran out of registers
+				reg > 6
+			) {
+			// The output should be stored on the stack
+			var->location = LOC_STCK;
+			var->offset = stack_accum;
+			stack_accum += _var_pure_size(var);
+		} else {
+			// The output should be stored in a register
+			var->location = reg;
+			var->offset = 0;
+			reg++;
+		}
 	}
 }
 
@@ -3495,15 +3553,15 @@ Scope scope_subscope(Scope *s, char *name) {
 // Scope variable creation and management
 
 int _scope_next_stack_loc(Scope *s, int size) {
-	int sum = 56 + size;
+	int sum = -56 - size;
 	
 	if (s->parent != NULL)
 		sum = _scope_next_stack_loc(s->parent, size);
 
 	for (size_t i = 0; i < s->stack_vars.count; i++) {
 		Variable *v = vect_get(&s->stack_vars, i);
-		if (v->offset + size > sum) {
-			sum = v->offset + size;
+		if (v->offset - size < sum) {
+			sum = v->offset - size;
 		}
 	}
 
@@ -3560,7 +3618,7 @@ Variable scope_mk_tmp(Scope *s, CompData *data, Variable *v) {
 
 	if ((is_inbuilt(v->type->name) && p_typ < 1) || p_typ == PTYPE_PTR || p_typ == PTYPE_PTR) {
 		int regs = _scope_avail_reg(s);
-		if (regs & (RMSK_B | RMSK_8 | RMSK_9)) {
+		if (regs & 0b111) {
 			
 			if (regs & RMSK_B) {
 				out.location = 2;
@@ -3578,7 +3636,7 @@ Variable scope_mk_tmp(Scope *s, CompData *data, Variable *v) {
 		}
 	}
 
-	int loc = _scope_next_stack_loc(s, _var_size(v));
+	int loc = _scope_next_stack_loc(s, _var_pure_size(v));
 	
 	out.location = LOC_STCK;
 	out.offset = loc;
@@ -3601,23 +3659,76 @@ void _scope_free_tmp_reg(Scope *s, Variable *v) {
 		if (to_free->location == v->location) {
 			var_end(to_free);
 			vect_remove(&s->reg_vars, i);
+			i--;
 		}
 	}
 }
 
+void _scope_free_stack_var(Scope *s, CompData *data, Variable *v) {
+	int new_top = -56;
+	int target_top = v->offset;
+	for (size_t i = 0; i < s->stack_vars.count; i++) {
+		Variable *to_free = vect_get(&s->stack_vars, i);
+		if(to_free->offset == target_top) {
+			var_end(to_free);
+			vect_remove(&s->stack_vars, i);
+			i--;
+		} else if (new_top > to_free->offset) {
+			new_top = to_free->offset;
+		}
+	}
 
+	if (new_top > target_top) {
+		// Restore rsp
+		vect_push_string(&data->text, "\tlea rsp, [rbp - ");
+		vect_push_free_string(&data->text, int_to_str(-new_top));
+		vect_push_string(&data->text, "]; Tmp variable removed\n");
+	}
+}
 
 // Free a tmp variable in the scope
 void scope_free_tmp(Scope *s, CompData *data, Variable *v) {
 	if (v->location > 0) {
 		_scope_free_tmp_reg(s, v);
+	} else {
+		_scope_free_stack_var(s, data, v);
 	}
 
 	var_end(v);
 }
 
-void scope_free_all_tmp(Scope* s) {
+void scope_free_all_tmp(Scope* s, CompData *data) {
+	for (size_t i = 0; i < s->reg_vars.count; i++) {
+		Variable *to_free = vect_get(&s->reg_vars, i);
+		if (to_free->location < RMSK_10) {
+			var_end(to_free);
+			vect_remove(&s->reg_vars, i);
+			i--;
+		}
+	}
 	
+	int new_top = 0;
+	for (size_t i = 0; i < s->stack_vars.count; i++) {
+		Variable *to_free = vect_get(&s->stack_vars, i);
+		if(strcmp(to_free->name, "#tmp")) {
+			var_end(to_free);
+			vect_remove(&s->stack_vars, i);
+			i--;
+
+			if (new_top == 0) {
+				new_top = -56;
+			}
+		} else if (new_top > to_free->offset) {
+			new_top = to_free->offset;
+		}
+	}
+
+	if (new_top > 0) {
+		// Restore rsp
+		vect_push_string(&data->text, "\tlea rsp, [rbp - ");
+		vect_push_free_string(&data->text, int_to_str(-new_top));
+		vect_push_string(&data->text, "]; All tmp free\n");
+	}
 }
 
 // Generate a new variable in the scope
@@ -3627,7 +3738,7 @@ void scope_mk_var(Scope *s, CompData *data, Variable *v) {
 
 	if ((is_inbuilt(v->type->name) && p_typ < 1) || p_typ == PTYPE_PTR || p_typ == PTYPE_PTR) {
 		int regs = _scope_avail_reg(s);
-		if (regs > (RMSK_B & RMSK_8 & RMSK_9)) {
+		if (regs > 0b111) {
 			
 			if (regs & RMSK_10) {
 				out.location = 11;
@@ -3650,12 +3761,15 @@ void scope_mk_var(Scope *s, CompData *data, Variable *v) {
 		}
 	}
 
-	int loc = _scope_next_stack_loc(s, _var_size(v));
+	int loc = _scope_next_stack_loc(s, _var_pure_size(v));
 	
 	out.location = LOC_STCK;
 	out.offset = loc;
 
-	var_op_pure_set(data, &out, v);
+	vect_push_string(&data->text, "\tlea rsp, [rbp - ");
+	vect_push_free_string(&data->text, int_to_str(-loc));
+	vect_push_string(&data->text, "]; Stack variable\n");
+
 	vect_push(&s->stack_vars, &out);
 }
 
@@ -4070,7 +4184,7 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 }
 
 // TODO: Operator evaluation, variable members, literals, function calls
-Variable eval(Scope *s, CompData *out, Vector *tokens, size_t *pos, bool keep) {
+Variable eval(Scope *s, CompData *out, Vector *tokens, size_t *pos, bool keep, Variable *out_type) {
 	Variable store;
 
 	size_t start = *pos;
@@ -4090,16 +4204,13 @@ Variable eval(Scope *s, CompData *out, Vector *tokens, size_t *pos, bool keep) {
 	}
 
 	store = _eval(s, out, tokens, start, end);
-	scope_free_all_tmp(s);
+	scope_free_all_tmp(s, out);
 	
 	if (keep) {
-		if(store.location == LOC_STCK || store.location == LOC_DATA) {
-			Variable tmp;
-			var_op_reference(out, &tmp, &store);
-			var_end(&store);
-			store = tmp;
-		}
-		var_chg_register(out, &store, 1);
+		Variable tmp = var_copy(out_type);
+		var_op_set(out, &tmp, &store);
+		var_end(&store);
+		store = tmp;
 	}
 	
 	*pos = end;
@@ -4307,7 +4418,8 @@ void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *po
 				if (f->outputs.count > 0) {
 					if (*pos + 1 < end && !tok_str_eq(t, "\n")) {
 						*pos += 1;
-						Variable e = eval(&fs, out, tokens, pos, true);
+						Variable *out_type = vect_get(&f->outputs, 0);
+						Variable e = eval(&fs, out, tokens, pos, true, out_type);
 						var_end(&e);
 					} else {
 						t = vect_get(tokens, *pos);
@@ -4337,7 +4449,7 @@ void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *po
 		} else {
 			// TODO: figure out eval parameter needs (maybe needs start and end size_t?)
 			// and how eval will play into top level defs (if at all)
-			Variable e = eval(&fs, out, tokens, pos, false);
+			Variable e = eval(&fs, out, tokens, pos, false, NULL);
 			var_end(&e);
 		}
 	}
