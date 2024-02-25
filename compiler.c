@@ -3537,16 +3537,19 @@ int _scope_avail_reg(Scope *s) {
 		if (v->location == 2) {
 			vmask = RMSK_B;
 		} else if (v->location > 8) {
-			vmask = 0b1 << (v->location - 8);
+			vmask = 1;
+			vmask = vmask << (v->location - 8);
 		}
 
-		mask = mask & !(vmask);
+		mask &= ~vmask;
 	}
 
 	return mask;
 }
 
-// Creates a new tmp variable from an existing variable 
+// Creates a new tmp variable from an existing variable
+// ALL TEMP VARIABLES SHOULD BE FREED BEFORE CREATING MORE
+// PERSISTANT VARIABLES TO PREVENT STACK CLUTTER!!!!!!
 Variable scope_mk_tmp(Scope *s, CompData *data, Variable *v) {
 	Variable out = var_copy(v);
 	int p_typ = _var_ptr_type(v);
@@ -3575,7 +3578,13 @@ Variable scope_mk_tmp(Scope *s, CompData *data, Variable *v) {
 		}
 	}
 
-	// TODO structs
+	int loc = _scope_next_stack_loc(s, _var_size(v));
+	
+	out.location = LOC_STCK;
+	out.offset = loc;
+
+	var_op_pure_set(data, &out, v);
+
 	vect_push(&s->stack_vars, &out);
 	return var_copy(&out);
 }
@@ -3587,19 +3596,31 @@ bool scope_is_tmp(Variable *v) {
 
 
 void _scope_free_tmp_reg(Scope *s, Variable *v) {
+	for (size_t i = 0; i < s->reg_vars.count; i++) {
+		Variable *to_free = vect_get(&s->reg_vars, i);
+		if (to_free->location == v->location) {
+			var_end(to_free);
+			vect_remove(&s->reg_vars, i);
+		}
+	}
 }
 
-void _scope_free_tmp_stack(Scope *s, CompData *data, Variable *v) {
-}
+
 
 // Free a tmp variable in the scope
 void scope_free_tmp(Scope *s, CompData *data, Variable *v) {
 	if (v->location > 0) {
 		_scope_free_tmp_reg(s, v);
 	}
-	_scope_free_tmp_stack(s, data, v);
+
+	var_end(v);
 }
 
+void scope_free_all_tmp(Scope* s) {
+	
+}
+
+// Generate a new variable in the scope
 void scope_mk_var(Scope *s, CompData *data, Variable *v) {
 	Variable out = var_copy(v);
 	int p_typ = _var_ptr_type(v);
@@ -3625,10 +3646,16 @@ void scope_mk_var(Scope *s, CompData *data, Variable *v) {
 			out.offset = 0;
 
 			vect_push(&s->reg_vars, &out);
+			return;
 		}
 	}
 
-	// TODO structs
+	int loc = _scope_next_stack_loc(s, _var_size(v));
+	
+	out.location = LOC_STCK;
+	out.offset = loc;
+
+	var_op_pure_set(data, &out, v);
 	vect_push(&s->stack_vars, &out);
 }
 
@@ -3655,6 +3682,7 @@ Variable _scope_check_vars(Scope *s, char *name) {
 }
 
 // Get a variable from the scope
+// should be freed
 Variable scope_get_var(Scope *s, char *name) {
 	Variable out = _scope_check_vars(s, name);
 
@@ -3662,8 +3690,12 @@ Variable scope_get_var(Scope *s, char *name) {
 		return out;
 
 	Artifact v_art = art_from_str(name, '.');
-	
+	Variable *maybe = mod_find_var(s->current, &v_art);
 	art_end(&v_art);
+
+	if (maybe != NULL)
+		out = var_copy(maybe);
+	return out;
 }
 
 
@@ -3788,17 +3820,69 @@ Vector eval_strict() {
 	return out;
 }
 
-Variable _eval_call() {
+Variable _eval_call(Scope *s, CompData *data, Vector *tokens, Function *f, size_t start) {
+	Variable v = {0};
+	v.name = NULL;
+	// TODO
 	
+	return v;
 }
 
 Variable _eval_dot(Scope *s, CompData *data, Vector *tokens, size_t start, size_t end) {
+	Token *t = vect_get(tokens, start);
 	if (start == end - 1) {
-		Token *t = vect_get(tokens, start);
 		return scope_get_var(s, t->data);
 	}
 	
-	Variable v;
+	Artifact name = art_from_str(t->data, '.');
+	Variable v = {0};
+	v.name = NULL;
+
+	// Match with first possible variable
+	for (; start < end; start = tnsl_next_non_nl(tokens, start)) {
+		// Try match variable
+		char *full = art_to_str(&name, '.');
+		v = scope_get_var(s, full);
+		free(full);
+
+		if (v.name != NULL) {
+			break;
+		}
+
+		// Try expand artifact, or call
+		t = vect_get(tokens, start);
+		if (tok_str_eq(t, ".")) {
+			t = vect_get(tokens, ++start);
+			if (t->type != TT_DEFWORD) {
+				printf("ERROR: Expected defword after '.' operator but found \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+				return v;
+			}
+			art_add_str(&name, t->data);
+		} else if (tok_str_eq(t, "(")) {
+			// Call
+			break;
+		} else {
+			printf("Failed to find variable or call in dot chain \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+			return v;
+		}
+	}
+
+	// After found var, or in call.  We need to check.
+	if (v.name == NULL) {
+		// Call
+		Function *f = mod_find_func(s->current, &name);
+		if (f == NULL) {
+			printf("ERROR: Could not find function \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+			art_end(&name);
+			return v;
+		}
+		v = _eval_call(s, data, tokens, f, start);
+	}
+
+	art_end(&name);
+
+	// TODO: Dot eval post processing (calls to methods, dereference, and members of structs)
+
 	return v;
 }
 
@@ -3851,9 +3935,6 @@ Variable _eval_literal(Scope *s, CompData *data, Vector *tokens, size_t literal)
 
 // Main implementation, recursive
 Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t end) {
-	Variable out;
-	out.name = NULL;
-
 	Token *t = vect_get(tokens, start);
 	if (start == end - 1 && t->type == TT_LITERAL) {
 		return _eval_literal(s, data, tokens, start);
@@ -3884,25 +3965,29 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 	}
 
 	// Found first delim and lowest priority op
-	
-	// Handle delim
+	Variable out;
+	out.name = NULL;
+	out.location = LOC_LITL;
+
 	if (op < 2){
-		if (delim == -1) {
+		// handle dot chain
+		Token *d = vect_get(tokens, delim);
+		if (delim == -1 || (d->data[0] == '(' && delim > start)) {
+			// Handle dot chains and calls
 			return _eval_dot(s, data, tokens, start, end);
 		}
 		
 		// Handle delim
-		Token *d = vect_get(tokens, delim);
 		int dcl = tnsl_find_closing(tokens, delim);
 		switch (d->data[0]){
 			case '(':
-				if(delim > start) {
-					return _eval_call();
-				} else if (dcl < end - 1) {
+				if (dcl < end - 1) {
+					// Extra tokens after paren are not yet supported
 					d = vect_get(tokens, dcl);
 					printf("Unexpected token after parenthesis \"%s\" (%d:%d)\n\n", d->data, d->line, d->col);
 					return out;
 				} else {
+					// Eval paren as expression
 					return _eval(s, data, tokens, start + 1, end - 1);
 				}
 			case '[':
@@ -3931,7 +4016,15 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 	
 	Variable rhs = _eval(s, data, tokens, op_pos + 1, end);
 	out = _eval(s, data, tokens, start, op_pos);
-	if (op != 10 && !scope_is_tmp(&out)) {
+	if (out.location == LOC_LITL) {
+		if (rhs.location != LOC_LITL) {
+			Variable tmp = rhs;
+			out = rhs;
+			rhs = tmp;
+		}
+	}
+	
+	if (op != 10 && !scope_is_tmp(&out) && out.location != LOC_LITL) {
 		out = scope_mk_tmp(s, data, &out);
 	}
 
@@ -3969,6 +4062,8 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 
 	if (scope_is_tmp(&rhs)) {
 		scope_free_tmp(s, data, &rhs);
+	} else {
+		var_end(&rhs);
 	}
 
 	return out;
@@ -3995,6 +4090,7 @@ Variable eval(Scope *s, CompData *out, Vector *tokens, size_t *pos, bool keep) {
 	}
 
 	store = _eval(s, out, tokens, start, end);
+	scope_free_all_tmp(s);
 	
 	if (keep) {
 		if(store.location == LOC_STCK || store.location == LOC_DATA) {
@@ -4006,6 +4102,7 @@ Variable eval(Scope *s, CompData *out, Vector *tokens, size_t *pos, bool keep) {
 		var_chg_register(out, &store, 1);
 	}
 	
+	*pos = end;
 	return store;
 }
 
