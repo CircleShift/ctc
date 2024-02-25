@@ -925,6 +925,8 @@ void var_op_index(CompData *out, Variable *store, Variable *from, Variable *inde
 // pointer arithmatic.  Should not be used to set the value of data reference variables
 // point to, but can be used to directly set the location that reference
 // variables point to for things like function parameter passing.
+// Should only be used when you can garantee that both types are equal and
+// you are not setting by reference
 void var_op_pure_set(CompData *out, Variable *store, Variable *from) {
 	if (store->location == LOC_LITL) {
 		printf("ERROR: Can't set a literal value by pure set.\n");
@@ -934,8 +936,6 @@ void var_op_pure_set(CompData *out, Variable *store, Variable *from) {
 		return;
 	}
 
-	char *tmp = NULL;
-	// Setting a struct.
 	if (from->location == LOC_LITL) {
 		vect_push_string(&out->text, "\tmov ");
 
@@ -958,10 +958,10 @@ void var_op_pure_set(CompData *out, Variable *store, Variable *from) {
 			vect_push_string(&out->text, "; literal move\n\n");
 		}
 		
-	} if ( !is_inbuilt(from->type->name) ) {
+	} else if (!is_inbuilt(from->type->name) && from->ptr_chain.count == 0) {
 		// Pure struct move
 		vect_push_string(&out->text, "\tlea rsi, ");
-		vect_push_free_string(&out->text, tmp);
+		vect_push_free_string(&out->text, _op_get_location(from));
 		vect_push_string(&out->text, "\n");
 
 		vect_push_string(&out->text, "\tlea rdi, ");
