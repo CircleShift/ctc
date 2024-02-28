@@ -392,6 +392,7 @@ typedef struct {
 #define LOC_STCK -1
 #define LOC_DATA 0
 
+#define PTYPE_NONE -2
 #define PTYPE_PTR -1
 #define PTYPE_REF 0
 #define PTYPE_ARR 1
@@ -586,7 +587,7 @@ Variable _op_coerce(Variable *base, Variable *to_coerce) {
 int _var_ptr_type(Variable *v) {
 	if(v->ptr_chain.count < 1) {
 		// Return an invalid value if ptr_chain has no values.
-		return -2;
+		return PTYPE_NONE;
 	}
 	return ((int*)v->ptr_chain.data)[v->ptr_chain.count - 1];
 }
@@ -3832,7 +3833,10 @@ Variable scope_get_var(Scope *s, Artifact *name) {
 	if (mod_search == NULL)
 		return out;
 
-	return var_copy(mod_search);
+	out = var_copy(mod_search);
+	out.location = 0;
+	out.offset = 0;
+	return out;
 }
 
 // TODO: Scope ops like sub-scoping, variable management
@@ -3948,6 +3952,7 @@ int op_order(Token *t) {
 	
 	return -1;
 }
+
 
 
 Variable _eval_call(Scope *s, CompData *data, Vector *tokens, Function *f, Variable *self, size_t start) {
@@ -4316,6 +4321,87 @@ Variable eval(Scope *s, CompData *out, Vector *tokens, size_t *pos, bool keep, V
 	return store;
 }
 
+void eval_strict_zero(CompData *out, Vector *tokens, Variable *v) {
+	int size = v->type->size;
+	bool array = false;
+	if (_var_ptr_type(v) < 2 && _var_ptr_type(v) > PTYPE_NONE) {
+		size = 8;
+	} else if (_var_ptr_type(v) > 1) {
+		size = v->type->size * _var_ptr_type(v); 
+	}
+
+	vect_push_free_string(&out->data, _var_get_datalabel(v));
+	vect_push_free_string(&out->data, ":\n");
+
+	if (array) {
+		vect_push_string(&out->data, "\tdq ");
+		vect_push_free_string(&out->data, int_to_str(_var_ptr_type(v)));
+		vect_push_string(&out->data, "\n");
+	}
+
+	vect_push_string(&out->data, "\tdb 0");
+	for (int i = 1; i < size; i++) {
+		vect_push_string(&out->data, ", 0");
+	}
+	vect_push_string(&out->data, "\n\n");
+}
+
+void eval_strict(CompData *out, Vector *tokens, Variable *v, size_t start, size_t end) {
+
+}
+
+// Compile a top-level definition
+void p2_compile_fdef(Module *root, CompData *out, Vector *tokens, size_t *pos) {
+	Variable type = tnsl_parse_type(tokens, *pos);
+	*pos = type.location;
+	var_end(&type);
+
+	size_t start = *pos;
+	Variable *cur;
+	while (*pos < tokens->count && !tok_str_eq(vect_get(tokens, *pos), "\n")) {
+		Token *t = vect_get(tokens, *pos);
+
+		if (start == *pos) {
+			if (t->type != TT_DEFWORD) {
+				printf("ERROR: Expected variable name (file), got \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+				p2_error = true;
+				return;
+			}
+			
+			Artifact v_art = art_from_str(t->data, '.');
+			cur = mod_find_var(root, &v_art);
+			art_end(&v_art);
+			
+			if (cur == NULL) {
+				printf("ERROR: Definition should have been cataloged but was not \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+				p2_error = true;
+				return;
+			} else if (cur->location == 0) {
+				printf("ERROR: Redefinition of variable \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+				p2_error = true;
+				return;
+			}
+		} else if (t->type == TT_DELIMIT) {
+			*pos = tnsl_find_closing(tokens, *pos);
+		} else if (tok_str_eq(t, ",")) {
+			if (*pos - start > 1) {
+				eval_strict(out, tokens, cur, start, *pos);
+			} else if(*pos - start > 0) {
+				eval_strict_zero(out, tokens, cur);
+			}
+			start = *pos + 1;
+		}
+
+		*pos += 1;
+	}
+
+	if (*pos - start > 1) {
+		eval_strict(out, tokens, cur, start, *pos);
+	} else if(*pos - start > 0) {
+		eval_strict_zero(out, tokens, cur);
+	}
+}
+
 // Compiles a variable definition inside a function block
 void p2_compile_def(Scope *s, CompData *out, Vector *tokens, size_t *pos) {
 
@@ -4331,18 +4417,18 @@ void p2_compile_def(Scope *s, CompData *out, Vector *tokens, size_t *pos) {
 		Token *t = vect_get(tokens, *pos);
 		
 		if (start == *pos) {
-			if (t->type == TT_DEFWORD) {
-				// Define new scope var
-				free(type.name);
-				Vector nm = vect_from_string(t->data);
-				type.name = vect_as_string(&nm);
-				Variable tmp = scope_mk_var(s, out, &type);
-				var_end(&tmp);
-			} else {
-				printf("ERROR: Expected variable name, got \"%s\" (%d:%d\n\n", t->data, t->line, t->col);
+			if (t->type != TT_DEFWORD) {
+				printf("ERROR: Expected variable name, got \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
 				p2_error = true;
 				return;
 			}
+
+			// Define new scope var
+			free(type.name);
+			Vector nm = vect_from_string(t->data);
+			type.name = vect_as_string(&nm);
+			Variable tmp = scope_mk_var(s, out, &type);
+			var_end(&tmp);
 		} else if (t->type == TT_DELIMIT) {
 			*pos = tnsl_find_closing(tokens, *pos);
 		} else if (tok_str_eq(t, ",")) {
@@ -4788,6 +4874,8 @@ void p2_file_loop(
 				}
 				vect_end(&asm_str);
 			}
+		} else if (tnsl_is_def(tokens, start)) {
+			p2_compile_fdef(root, out, tokens, &start);
 		}
 	}
 }
