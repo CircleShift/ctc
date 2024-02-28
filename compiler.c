@@ -800,20 +800,20 @@ void var_chg_register(CompData *out, Variable *swap, int new_reg) {
 // or value setting.
 void var_op_dereference(CompData *out, Variable *store, Variable *from) {
 	*store = var_copy(from);
-	if(from->ptr_chain.count < 1 || _var_ptr_type(from) != PTYPE_REF) {
-		printf("WARNING: var_op_dereference called on variable which is not a reference!");
+	if(from->ptr_chain.count < 1) {
+		printf("WARNING: var_op_dereference called on variable which is not a pointer!\n");
 		return;
 	}
 
-	if (from->location < 1 || from->ptr_chain.count > 1) {
+	// If we are not in a register, or we are a multiref not already in rsi
+	if (from->location < 1 || (_var_ptr_type(from) == PTYPE_REF && from->location != 5 && from->ptr_chain.count > 1)) {
 		// Generate initial move (from -> rsi)
-		if (_var_ptr_type(from) > 0)
+		if (_var_ptr_type(from) > 1)
+			// If in-place array, generate reference by lea
 			vect_push_string(&out->text, "\tlea rsi, ");
 		else
+			// If pointer, generate reference by mov
 			vect_push_string(&out->text, "\tmov rsi, ");
-
-		if (from->location == LOC_DATA || from->location == LOC_STCK)
-			vect_push_string(&out->text, PREFIXES[7]);
 		
 		vect_push_free_string(&out->text, _op_get_location(from));
 		vect_push_string(&out->text, "; Move for dereference\n");
@@ -1111,8 +1111,8 @@ char *_var_get_from(CompData *out, Variable *store, Variable *from) {
 		vect_push_free_string(&out->text, _op_get_location(from));
 		vect_push_string(&out->text, " ; pre-deref for inbuilt mov (from)\n");
 
-		for(size_t i = store->ptr_chain.count - 1; i > 0; i--){
-			int *cur = vect_get(&store->ptr_chain, i);
+		for(size_t i = from->ptr_chain.count - 1; i > 0; i--){
+			int *cur = vect_get(&from->ptr_chain, i);
 			if (cur == PTYPE_REF) {
 				vect_push_string(&out->text, "\tmov rsi, [rsi] ; deref for mov\n");
 			} else
@@ -1122,7 +1122,7 @@ char *_var_get_from(CompData *out, Variable *store, Variable *from) {
 		vect_push_string(&out->text, "\tmov ");
 		vect_push_free_string(&out->text, _op_get_register(5, _var_size(from)));
 		vect_push_string(&out->text, ", ");
-		vect_push_string(&out->text, PREFIXES[_var_size(from)]);
+		vect_push_string(&out->text, PREFIXES[_var_size(from) - 1]);
 		vect_push_string(&out->text, "[rsi] ; pre-deref for inbuilt mov (from)\n");
 
 		mov_from = _op_get_register(5, _var_size(from));
@@ -1317,6 +1317,22 @@ void var_op_reference(CompData *out, Variable *store, Variable *from) {
 		printf("ERROR: Unable to do dereference with literal value\n\n");
 		return;
 	}
+	
+	*store = var_copy(from);
+	if (store->ptr_chain.count > 0) {
+		for(size_t i = 0; i < store->ptr_chain.count; i++) {
+			int *cur = vect_get(&store->ptr_chain, i);
+			if (*cur == PTYPE_REF) {
+				*cur = PTYPE_PTR;
+				break;
+			}
+		}
+	} else {
+		int ref = PTYPE_REF;
+		vect_push(&store->ptr_chain, &ref);
+	}
+	store->location = 5;
+	store->offset = 0;
 
 	if(from->ptr_chain.count > 0 && _var_ptr_type(from) == PTYPE_REF) {
 		// The value is a reference to data, so we should just copy it
@@ -1331,38 +1347,24 @@ void var_op_reference(CompData *out, Variable *store, Variable *from) {
 	}
 
 	vect_push_string(&out->text, "\tlea ");
-	if(store->location < 1) {
-		// Store is on stack or in data sec, so we need to
-		// copy into a tmp register first (we use rsi by convention)
-		vect_push_free_string(&out->text, _op_get_register(5, _var_pure_size(store)));
-	} else {
-		// Since store is in a register we can directly lea
-		vect_push_free_string(&out->text, _op_get_register(store->location, _var_pure_size(store)));
-	}
-
+	vect_push_free_string(&out->text, _op_get_register(5, _var_pure_size(store)));
 	vect_push_string(&out->text, ", ");
 	vect_push_free_string(&out->text, _op_get_location(from));
 	vect_push_string(&out->text, " ; Generate reference\n");
-
-	if(store->location < 1) {
-		// If we stored in a tmp register, we need to complete
-		// the move
-		vect_push_string(&out->text, "\tmov ");
-		vect_push_free_string(&out->text, _op_get_location(store));
-		vect_push_string(&out->text, ", ");
-		vect_push_free_string(&out->text, _op_get_register(5, _var_pure_size(store)));
-		vect_push_string(&out->text, " ; Move ref from tmp register to final location\n");
-	}
-
 	vect_push_string(&out->text, "\n");
 }
 
-Variable var_op_member(Variable *from, char *member) {
+Variable var_op_member(CompData *data, Variable *from, char *member) {
 	Variable out = {0};
 	out.name = NULL; // This is how you can check weather we succeeded
 	
 	if (from->location == LOC_LITL) {
 		printf("ERROR: Unable to take member from literal value");
+		return out;
+	}
+	
+	if (from->ptr_chain.count > 1 || (from->ptr_chain.count == 1 && _var_ptr_type(from) != PTYPE_REF)) {
+		printf("ERROR: Can't generate member for pointer!\n");
 		return out;
 	}
 
@@ -1373,6 +1375,9 @@ Variable var_op_member(Variable *from, char *member) {
 			break;
 		}
 	}
+	
+	if (out.name == NULL)
+		return out;
 
 	// Copy ptr_chain so when using the variable we follow all references
 	for(size_t i = 0; i < from->ptr_chain.count; i++) {
@@ -1385,14 +1390,25 @@ Variable var_op_member(Variable *from, char *member) {
 	
 	// If the variable is in the data section, we should copy
 	// the name as well so references are properly handled
-	if(out.location == LOC_DATA) {
+	if (out.location != 5 && _var_ptr_type(&out) == PTYPE_REF) {
+		out.location = 5;
+		var_op_pure_set(data, &out, from);
+	} else if(out.location == LOC_DATA) {
 		free(out.name);
 		Vector name = vect_from_string(from->name);
 		out.name = vect_as_string(&name);
 	}
 
-	// If from is already offset, we should base our new offset on the old one.
-	out.offset += from->offset;
+	if (out.location == 5 && out.offset > 0) {
+		vect_push_string(&data->text, "\tadd rsi, ");
+		vect_push_free_string(&data->text, int_to_str(out.offset));
+		vect_push_string(&data->text, "; Member generation in reference\n");
+		out.offset = 0;
+	} else {
+		// If from is already offset, we should base our new offset on the old one.
+		out.offset += from->offset;
+	}
+
 
 	return out;
 }
@@ -1897,7 +1913,7 @@ Variable *mod_find_var(Module *mod, Artifact *art) {
 Module *mod_find_sub(Module *mod, char *chk) {
 	for(size_t i = 0; i < mod->submods.count; i++) {
 		Module *m = vect_get(&mod->submods, i);
-		if(strcmp(m->name, chk))
+		if(strcmp(m->name, chk) == 0)
 				return m;
 	}
 	return NULL;
@@ -3110,9 +3126,8 @@ void p1_parse_module(Artifact *path, Module *root, Vector *tokens, size_t *pos) 
 
 	if (out == NULL) {
 		Module tmp = mod_init(name, root, export);
-		out = &tmp;
-		p1_file_loop(path, out, tokens, *pos, end);
-		vect_push(&(root->submods), out);
+		p1_file_loop(path, &tmp, tokens, *pos, end);
+		vect_push(&(root->submods), &tmp);
 	} else {
 		p1_file_loop(path, out, tokens, *pos, end);
 		vect_push(&(root->submods), out);
@@ -3262,6 +3277,8 @@ void p1_size_type (Module *root, Type *t) {
 		Artifact rta = art_from_str(n_end + 1, '.');
 		free(var->name);
 		var->name = vect_as_string(&name);
+
+		var->offset = sum;
 
 		Type *mt = mod_find_type(root, &rta);
 		art_end(&rta);
@@ -3710,7 +3727,7 @@ void scope_free_all_tmp(Scope* s, CompData *data) {
 	int new_top = 0;
 	for (size_t i = 0; i < s->stack_vars.count; i++) {
 		Variable *to_free = vect_get(&s->stack_vars, i);
-		if(strcmp(to_free->name, "#tmp")) {
+		if(strcmp(to_free->name, "#tmp") == 0) {
 			var_end(to_free);
 			vect_remove(&s->stack_vars, i);
 			i--;
@@ -3774,7 +3791,7 @@ Variable scope_mk_var(Scope *s, CompData *data, Variable *v) {
 	return var_copy(&out);
 }
 
-Variable _scope_check_vars(Scope *s, char *name) {
+Variable _scope_get_var(Scope *s, char *name) {
 	for (size_t i = 0; i < s->reg_vars.count; i++) {
 		Variable *v = vect_get(&s->reg_vars, i);
 		if (strcmp(v->name, name) == 0)
@@ -3793,26 +3810,30 @@ Variable _scope_check_vars(Scope *s, char *name) {
 		return out;
 	}
 
-	return _scope_check_vars(s->parent, name);
+	return _scope_get_var(s->parent, name);
 }
 
-// Get a variable from the scope
-// should be freed
-Variable scope_get_var(Scope *s, char *name) {
-	Variable out = _scope_check_vars(s, name);
+
+Variable scope_get_var(Scope *s, Artifact *name) {
+	Variable out = {0};
+	out.name = NULL;
+
+	if (name->count == 1) {
+		char *full = art_to_str(name, '.');
+		out = _scope_get_var(s, full);
+		free(full);
+	}
 
 	if (out.name != NULL)
 		return out;
 
-	Artifact v_art = art_from_str(name, '.');
-	Variable *maybe = mod_find_var(s->current, &v_art);
-	art_end(&v_art);
+	Variable *mod_search = mod_find_var(s->current, name);
+	
+	if (mod_search == NULL)
+		return out;
 
-	if (maybe != NULL)
-		out = var_copy(maybe);
-	return out;
+	return var_copy(mod_search);
 }
-
 
 // TODO: Scope ops like sub-scoping, variable management
 // conditional handling, data-section parts for function
@@ -3928,14 +3949,8 @@ int op_order(Token *t) {
 	return -1;
 }
 
-// Strict eval for top-level definitions
-Vector eval_strict() {
-	Vector out = vect_init(sizeof(int));
-	// TODO
-	return out;
-}
 
-Variable _eval_call(Scope *s, CompData *data, Vector *tokens, Function *f, size_t start) {
+Variable _eval_call(Scope *s, CompData *data, Vector *tokens, Function *f, Variable *self, size_t start) {
 	Variable v = {0};
 	v.name = NULL;
 	// TODO
@@ -3945,20 +3960,21 @@ Variable _eval_call(Scope *s, CompData *data, Vector *tokens, Function *f, size_
 
 Variable _eval_dot(Scope *s, CompData *data, Vector *tokens, size_t start, size_t end) {
 	Token *t = vect_get(tokens, start);
+	Artifact name = art_from_str(t->data, '.');
+
 	if (start == end - 1) {
-		return scope_get_var(s, t->data);
+		return scope_get_var(s, &name);
 	}
 	
-	Artifact name = art_from_str(t->data, '.');
 	Variable v = {0};
 	v.name = NULL;
 
 	// Match with first possible variable
+	start = tnsl_next_non_nl(tokens, start);
 	for (; start < end; start = tnsl_next_non_nl(tokens, start)) {
 		// Try match variable
-		char *full = art_to_str(&name, '.');
-		v = scope_get_var(s, full);
-		free(full);
+
+		v = scope_get_var(s, &name);
 
 		if (v.name != NULL) {
 			break;
@@ -3967,7 +3983,7 @@ Variable _eval_dot(Scope *s, CompData *data, Vector *tokens, size_t start, size_
 		// Try expand artifact, or call
 		t = vect_get(tokens, start);
 		if (tok_str_eq(t, ".")) {
-			t = vect_get(tokens, ++start);
+			t = vect_get(tokens, start);
 			if (t->type != TT_DEFWORD) {
 				printf("ERROR: Expected defword after '.' operator but found \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
 				return v;
@@ -3977,21 +3993,66 @@ Variable _eval_dot(Scope *s, CompData *data, Vector *tokens, size_t start, size_
 			// Call
 			break;
 		} else {
-			printf("Failed to find variable or call in dot chain \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+			printf("ERROR: Failed to find variable or call in dot chain \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
 			return v;
 		}
 	}
+	
+	for (; start < end; start = tnsl_next_non_nl(tokens, start)) {
+		t = vect_get(tokens, start);
 
-	// After found var, or in call.  We need to check.
-	if (v.name == NULL) {
-		// Call
-		Function *f = mod_find_func(s->current, &name);
-		if (f == NULL) {
-			printf("ERROR: Could not find function \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+		// After found var, or in call.  We need to check.
+		if (tok_str_eq(t, "(")) {
+			if (v.name == NULL) {
+				Function *f = mod_find_func(s->current, &name);
+				if (f == NULL) {
+					printf("ERROR: Could not find function \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+					art_end(&name);
+					return v;
+				}
+				v = _eval_call(s, data, tokens, f, NULL, start);
+			} else {
+				Function *m = mod_find_func(v.mod, &name);
+				if (m == NULL) {
+					printf("ERROR: Could not find function \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+					art_end(&name);
+					return v;
+				}
+				Variable tmp = _eval_call(s, data, tokens, m, &v, start);
+				var_end(&v);
+				v = tmp;
+			}
 			art_end(&name);
-			return v;
+			start = tnsl_find_closing(tokens, start);
+			name = art_from_str("", '.');
+		} else if (tok_str_eq(t, "`")) {
+			Variable store;
+			var_op_dereference(data, &store, &v);
+			var_end(&v);
+			v = store;
+		} else if (tok_str_eq(t, ".")) {
+			Token *next = vect_get(tokens, start + 1);
+			if (next == NULL || next->type != TT_DEFWORD) {
+				printf("ERROR: Expected defword after dot in dotchain: \"%s\" (%d:%d)\n", t->data, t->line, t->col);
+				art_end(&name);
+				return v;
+			}
+			char *m_name = next->data;
+			next = vect_get(tokens, start + 2);
+			if (next == NULL || !tok_str_eq(next, "(")) {
+				Variable m = var_op_member(data, &v, m_name);
+				if (m.name == NULL) {
+					printf("ERROR: Unable to find member variable: \"%s\" of variable \"%s\" (%d:%d)\n", next->data, v.name, next->line, next->col);
+					art_end(&name);
+					return v;
+				}
+				var_end(&v);
+				v = m;
+			} else if (tok_str_eq(next, "(")) {
+				art_add_str(&name, next->data);
+			}
+			start++;
 		}
-		v = _eval_call(s, data, tokens, f, start);
 	}
 
 	art_end(&name);
@@ -4089,7 +4150,13 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 		Token *d = vect_get(tokens, delim);
 		if (delim == -1 || (d->data[0] == '(' && delim > start)) {
 			// Handle dot chains and calls
-			return _eval_dot(s, data, tokens, start, end);
+			out = _eval_dot(s, data, tokens, start, end);
+			if (out.location == 5) {
+				Variable tmp = scope_mk_tmp(s, data, &out);
+				var_end(&out);
+				out = tmp;
+			}
+			return out;
 		}
 		
 		// Handle delim
@@ -4141,6 +4208,24 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 	// TODO
 	
 	Variable rhs = _eval(s, data, tokens, op_pos + 1, end);
+
+	if (op_pos == start) {
+		if (op_token->data[0] == '~') {
+			if (rhs.location > 0 && rhs.ptr_chain.count < 1) {
+				// Move to stack
+			}
+			Variable store;
+			var_op_reference(data, &store, &rhs);
+			var_end(&rhs);
+			rhs = scope_mk_tmp(s, data, &store);
+			var_end(&store);
+			return rhs;
+		} else {
+			printf("ERROR: Unexpected prefix token\n");
+			return rhs;
+		}
+	}
+
 	out = _eval(s, data, tokens, start, op_pos);
 	if (out.location == LOC_LITL) {
 		if (rhs.location != LOC_LITL) {
@@ -4707,15 +4792,6 @@ void p2_file_loop(
 	}
 }
 
-void p2_finalize_data(Module *root, CompData *out) {
-	// TODO: deal with all module vars, create data section.
-}
-
-CompData phase_2(Artifact *path, Module *root) {
-	CompData out = p2_compile_file(path, root);
-	p2_finalize_data(root, &out);
-	return out;
-}
 
 void compile(Artifact *path_in, Artifact *path_out) {
 
@@ -4730,7 +4806,7 @@ void compile(Artifact *path_in, Artifact *path_out) {
 		return;
 	}
 
-	CompData out = phase_2(path_in, &root);
+	CompData out = p2_compile_file(path_in, &root);
 	mod_deep_end(&root);
 
 	if (p2_error) {
