@@ -1,9 +1,9 @@
 #!/bin/bash
 
-mkdir -p ./build/artifact
+mkdir -p ./out/artifact
 filename=$1
 filename="${filename%.*}"
-./ctc $1 build/artifact/$filename.asm
-nasm -f elf64 -o ./build/artifact/$filename.o ./build/artifact/$filename.asm
-gcc -o ./build/$filename ./build/artifact/$filename.o
+./ctc $1 out/artifact/$filename.asm
+nasm -f elf64 -o ./out/artifact/$filename.o ./out/artifact/$filename.asm
+gcc -o ./out/$filename ./out/artifact/$filename.o
 
