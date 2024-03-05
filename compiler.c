@@ -4323,7 +4323,7 @@ Variable eval(Scope *s, CompData *out, Vector *tokens, size_t *pos, bool keep, V
 }
 
 void eval_strict_zero(CompData *out, Vector *tokens, Variable *v) {
-	int size = v->type->size;
+	int size = _var_pure_size(v);
 	bool array = false;
 	if (_var_ptr_type(v) < 2 && _var_ptr_type(v) > PTYPE_NONE) {
 		size = 8;
@@ -4347,8 +4347,170 @@ void eval_strict_zero(CompData *out, Vector *tokens, Variable *v) {
 	vect_push_string(&out->data, "\n\n");
 }
 
-void eval_strict(CompData *out, Vector *tokens, Variable *v, size_t start, size_t end) {
+void eval_strict_literal(Vector *out, Vector *tokens, Variable *v, size_t start) {
+	Token *cur = vect_get(tokens, start);
+	
+	if (cur->type != TT_LITERAL) {
+		printf("ERROR: Expected literal value, got \"%s\" (%d:%d)\n\n", cur->data, cur->line, cur->col);
+		p2_error = true;
+		return;
+	} else if (cur->data[0] == '"') {
+		printf("ERROR: Unexpected string literal (wanted numeric or character value), got \"%s\" (%d:%d)\n\n", cur->data, cur->line, cur->col);
+		p2_error = true;
+		return;
+	}
+	
+	char *numstr;
+	if (cur->data[0] == '\'') {
+		numstr = int_to_str(tnsl_unquote_char(cur->data));
+	} else {
+		numstr = int_to_str(tnsl_parse_number(cur));
+	}
 
+	char *str;
+	
+	switch(_var_size(v)) {
+		case 1:
+			str = "\tdb ";
+		case 2:
+			str = "\tdw ";
+		case 4:
+			str = "\tdd ";
+		case 8:
+			str = "\tdq ";
+	}
+
+	vect_push_string(out, str);
+	vect_push_free_string(out, numstr);
+	vect_push_string(out, "; Numeric literal\n");
+}
+
+void eval_strict_composite(Module *mod, Vector *out, Vector *tokens, Variable *v, size_t start, char *datalab, int *ntharr);
+
+void eval_strict_arr(Module *mod, Vector *out, Vector *tokens, Variable *v, size_t start, char *datalab, int *ntharr) {
+	Vector store = vect_from_string(datalab);
+	vect_push_string(&store, "#ptr");
+	vect_push_free_string(&store, int_to_str(*ntharr));
+	vect_push_string(&store, ":\n");
+	
+	// TODO array eval loop
+	
+	// Overwrite out
+	vect_push_string(&store, vect_as_string(out));
+	vect_end(out);
+	*out = store;
+}
+
+void eval_strict_ptr(Module *mod, Vector *out, Vector *tokens, Variable *v, size_t start, char *datalab, int *ntharr) {
+	Token *cur = vect_get(tokens, start);
+
+	if (tok_str_eq(cur, "~")) {
+		// define qword pointer to existing label
+		Artifact v_art = art_from_str("", '.');
+		for (start++; ;start++) {
+			cur = vect_get(tokens, start);
+			if (cur == NULL) {
+				cur = tnsl_find_last_token(tokens, start);
+				break;
+			} else if (cur->type == TT_DEFWORD) {
+				art_add_str(&v_art, cur->data);
+			} else if (!tok_str_eq(cur, ".")) {
+				printf("ERROR: Unexpected token in pointer declaration (file level) \"%s\", (%d:%d)\n\n", cur->data, cur->line, cur->col);
+				p2_error = true;
+				break;
+			}
+		}
+
+		// Find var and get data label
+		Variable *ptr = mod_find_var(mod, &v_art);
+		if (ptr == NULL) {
+			char *v_name = art_to_str(&v_art, '.');
+			printf("ERROR: Could not find variable \"%s\" for pointer value (%d:%d)\n\n", v_name, cur->line, cur->col);
+			free(v_name);
+		}
+		vect_push_string(out, "\tdq ");
+		vect_push_free_string(out, _var_get_datalabel(ptr));
+		vect_push_string(out, "\n");
+
+	} else if (tok_str_eq(cur, "{") || cur->data[0] == '\"') {
+		// Harder, define array
+		vect_push_string(out, "\tdq ");
+		vect_push_string(out, datalab);
+		vect_push_string(out, "#ptr");
+		vect_push_free_string(out, int_to_str(*ntharr));
+		vect_push_string(out, " ; ref to pointer\n");
+		eval_strict_arr(mod, out, tokens, v, start, datalab, ntharr);
+	} else if (cur->type == TT_LITERAL){
+		// Literal value interpreted as memory location
+		eval_strict_literal(out, tokens, v, start);
+	} else {
+		// Not impl
+		printf("ERROR: Unexpected token when parsing a pointer value at \"%s\" (%d:%d)\n\n", cur->data, cur->line, cur->col);
+		p2_error = true;
+	}
+}
+
+void eval_strict_composite(Module *mod, Vector *out, Vector *tokens, Variable *v, size_t start, char *datalab, int *ntharr) {
+	Token *cur = vect_get(tokens, start);
+
+	if (!tok_str_eq(cur, "{")) {
+		printf("ERROR: Expected composite value (enclosed with '{}'), got \"%s\" (%d:%d)\n\n", cur->data, cur->line, cur->col);
+		p2_error = true;
+		return;
+	}
+
+	int last = tnsl_find_closing(tokens, start);
+	if (last < 0) {
+		printf("ERROR: Could not find closing '}' for composite value (%d:%d)\n\n", cur->line, cur->col);
+		p2_error = true;
+		return;
+	}
+	
+	size_t subvar = 0;
+	bool first = true;
+	for (start++; start < last; start++) {
+		if (first) {
+			Variable *sub = vect_get(&v->type->members, subvar);
+			if (sub == NULL) {
+				// Reached end of subvars, discard rest
+				start = last;
+				continue;
+			} else if (_var_ptr_type(sub) > 1) {
+				eval_strict_arr(mod, out, tokens, sub, start, datalab, ntharr);
+			} else if (_var_ptr_type(sub) > PTYPE_NONE) {
+				eval_strict_ptr(mod, out, tokens, sub, start, datalab, ntharr);
+			} else if (!is_inbuilt(sub->type->name)) {
+				eval_strict_composite(mod, out, tokens, sub, start, datalab, ntharr);
+			} else {
+				eval_strict_literal(out, tokens, sub, start);
+			}
+			subvar++;
+		}
+
+		Token *cur = vect_get(tokens, start);
+		
+	}
+}
+
+void eval_strict(CompData *out, Vector *tokens, Variable *v, size_t start) {
+	char *datalab = _var_get_datalabel(v);
+	Vector store = vect_from_string(datalab);
+	vect_push_string(&store, ":\n");
+	size_t ntharr = 0;
+
+	Token *cur = vect_get(tokens, start + 1);
+
+	if (_var_ptr_type(v) > 1) {
+		eval_strict_arr(v->mod, &store, tokens, v, start + 2, datalab, &ntharr);
+	} else if (_var_ptr_type(v) > PTYPE_NONE) {
+		eval_strict_ptr(v->mod, &store, tokens, v, start + 2, datalab, &ntharr);
+	} else if (!is_inbuilt(v->type->name)) {
+		eval_strict_composite(v->mod, &store, tokens, v, start + 2, datalab, &ntharr);
+	} else {
+		eval_strict_literal(&store, tokens, v, start + 2);
+	}
+
+	vect_push_string(&out->data, vect_as_string(&store));
 }
 
 // Compile a top-level definition
@@ -4386,7 +4548,7 @@ void p2_compile_fdef(Module *root, CompData *out, Vector *tokens, size_t *pos) {
 			*pos = tnsl_find_closing(tokens, *pos);
 		} else if (tok_str_eq(t, ",")) {
 			if (*pos - start > 1) {
-				eval_strict(out, tokens, cur, start, *pos);
+				eval_strict(out, tokens, cur, start);
 			} else if(*pos - start > 0) {
 				eval_strict_zero(out, tokens, cur);
 			}
@@ -4397,7 +4559,7 @@ void p2_compile_fdef(Module *root, CompData *out, Vector *tokens, size_t *pos) {
 	}
 
 	if (*pos - start > 1) {
-		eval_strict(out, tokens, cur, start, *pos);
+		eval_strict(out, tokens, cur, start);
 	} else if(*pos - start > 0) {
 		eval_strict_zero(out, tokens, cur);
 	}
