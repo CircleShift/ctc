@@ -1,0 +1,4 @@
+/; main [int]
+	int i = 69
+	return i
+;/

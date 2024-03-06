@@ -1,0 +1,14 @@
+struct Vector {
+	~void data,
+	int
+		size,
+		count,
+		_el_sz
+}
+
+/; main [int]
+	Vector a
+	a.size = 69
+	return a.size
+;/
+

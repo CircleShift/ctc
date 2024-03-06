@@ -1,0 +1,23 @@
+struct Vector {
+	~void data,
+	int
+		size,
+		count,
+		_el_sz
+}
+
+/; method Vector
+
+	/; init
+		self.size = 69
+	;/
+;/
+
+/; main [int]
+
+	Vector a
+	a.init()
+
+	return a.size
+
+;/
