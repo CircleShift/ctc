@@ -3968,7 +3968,9 @@ Variable _eval_dot(Scope *s, CompData *data, Vector *tokens, size_t start, size_
 	Artifact name = art_from_str(t->data, '.');
 
 	if (start == end - 1) {
-		return scope_get_var(s, &name);
+		Variable v = scope_get_var(s, &name);
+		art_end(&name);
+		return v;
 	}
 	
 	Variable v = {0};
@@ -4609,7 +4611,7 @@ void eval_strict(CompData *out, Vector *tokens, Variable *v, size_t start) {
 	char *datalab = _var_get_datalabel(v);
 	Vector store = vect_from_string(datalab);
 	vect_push_string(&store, ":\n");
-	size_t ntharr = 0;
+	int ntharr = 0;
 
 	Token *cur = vect_get(tokens, start + 1);
 
