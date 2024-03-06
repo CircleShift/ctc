@@ -4332,7 +4332,7 @@ void eval_strict_zero(CompData *out, Vector *tokens, Variable *v) {
 	}
 
 	vect_push_free_string(&out->data, _var_get_datalabel(v));
-	vect_push_free_string(&out->data, ":\n");
+	vect_push_string(&out->data, ":\n");
 
 	if (array) {
 		vect_push_string(&out->data, "\tdq ");
@@ -4386,19 +4386,121 @@ void eval_strict_literal(Vector *out, Vector *tokens, Variable *v, size_t start)
 }
 
 void eval_strict_composite(Module *mod, Vector *out, Vector *tokens, Variable *v, size_t start, char *datalab, int *ntharr);
+void eval_strict_ptr(Module *mod, Vector *out, Vector *tokens, Variable *v, size_t start, char *datalab, int *ntharr);
 
 void eval_strict_arr(Module *mod, Vector *out, Vector *tokens, Variable *v, size_t start, char *datalab, int *ntharr) {
 	Vector store = vect_from_string(datalab);
 	vect_push_string(&store, "#ptr");
 	vect_push_free_string(&store, int_to_str(*ntharr));
 	vect_push_string(&store, ":\n");
+	*ntharr += 1;
 	
 	// TODO array eval loop
 	
+	Variable strip = var_copy(v);
+	vect_pop(&strip.ptr_chain);
+	
+	Token *cur = vect_get(tokens, start);
+	if (cur->data[0] == '\"') {
+		Vector data = tnsl_unquote_str(cur->data);
+		vect_push_string(&store, "\tdq ");
+		vect_push_free_string(&store, int_to_str(data.count));
+		vect_push_string(&store, "\n");
+
+		// char array
+		switch(_var_pure_size(&strip)) {
+		default:
+		case 1:
+			vect_push_string(&store, "\tdb ");
+			break;
+		case 2:
+			vect_push_string(&store, "\tdw ");
+			break;
+		case 4:
+			vect_push_string(&store, "\tdd ");
+			break;
+		case 8:
+			vect_push_string(&store, "\tdq ");
+			break;
+		}
+
+		for(size_t i = 0; i < data.count; i++) {
+			char *num = vect_get(&data, i);
+			vect_push_free_string(&store, int_to_str(*num));
+			if (i + 1 < data.count) {
+				vect_push_string(&store, ", ");
+			}
+		}
+
+		if (data.count == 0) {
+			vect_push_string(&store, "0");
+		}
+
+		vect_push_string(&store, "\n");
+	} else if (cur->data[0] == '{') {
+		// Traditional array
+		int end = tnsl_find_closing(tokens, start);
+		int count = 0;
+		bool first = true;
+
+		for (size_t i = start; i < end; i++) {
+			cur = vect_get(tokens, i);
+			if(tok_str_eq(cur, ",")) {
+				first = true;
+			} else {
+				if (first) {
+					count++;
+					first = false;
+				}
+
+				if (cur->type == TT_DELIMIT) {
+					i = tnsl_find_closing(tokens, i);
+				}
+			}
+		}
+		
+		vect_push_string(&store, "\tdq ");
+		vect_push_free_string(&store, int_to_str(count));
+		vect_push_string(&store, "\n");
+
+		first = true;
+		for (start++; start < end; start++) {
+			cur = vect_get(tokens, start);
+			if(tok_str_eq(cur, ",")) {
+				first = true;
+			} else {
+				if (first) {
+					first = false;
+					if (_var_ptr_type(&strip) > 1) {
+						eval_strict_arr(mod, &store, tokens, &strip, start + 2, datalab, ntharr);
+					} else if (_var_ptr_type(v) > PTYPE_NONE) {
+						eval_strict_ptr(mod, &store, tokens, &strip, start + 2, datalab, ntharr);
+					} else if (!is_inbuilt(v->type->name)) {
+						eval_strict_composite(mod, &store, tokens, &strip, start + 2, datalab, ntharr);
+					} else {
+						eval_strict_literal(&store, tokens, &strip, start + 2);
+					}
+				}
+
+				if (cur->type == TT_DELIMIT) {
+					start = tnsl_find_closing(tokens, start);
+				}
+			}
+		}
+	} else {
+		printf("ERROR: Expected array but found \"%s\" (%d:%d)\n\n", cur->data, cur->line, cur->col);
+	}
+	var_end(&strip);
+	
 	// Overwrite out
-	vect_push_string(&store, vect_as_string(out));
-	vect_end(out);
-	*out = store;
+	if (_var_ptr_type(v) < 2) {
+		vect_push_string(&store, vect_as_string(out));
+		vect_end(out);
+		*out = store;
+	} else {
+		vect_push_string(out, vect_as_string(&store));
+		vect_end(&store);
+	}
 }
 
 void eval_strict_ptr(Module *mod, Vector *out, Vector *tokens, Variable *v, size_t start, char *datalab, int *ntharr) {
@@ -4414,6 +4516,8 @@ void eval_strict_ptr(Module *mod, Vector *out, Vector *tokens, Variable *v, size
 				break;
 			} else if (cur->type == TT_DEFWORD) {
 				art_add_str(&v_art, cur->data);
+			} else if (tok_str_eq(cur, "\n") || tok_str_eq(cur, ",")) {
+				break;
 			} else if (!tok_str_eq(cur, ".")) {
 				printf("ERROR: Unexpected token in pointer declaration (file level) \"%s\", (%d:%d)\n\n", cur->data, cur->line, cur->col);
 				p2_error = true;
@@ -4438,7 +4542,13 @@ void eval_strict_ptr(Module *mod, Vector *out, Vector *tokens, Variable *v, size
 		vect_push_string(out, datalab);
 		vect_push_string(out, "#ptr");
 		vect_push_free_string(out, int_to_str(*ntharr));
-		vect_push_string(out, " ; ref to pointer\n");
+		
+		if (_var_ptr_type(v) < 1) {
+			vect_push_string(out, " + 8 ; ref to pointer\n");
+		} else {
+			vect_push_string(out, " ; ref to pointer\n");
+		}
+
 		eval_strict_arr(mod, out, tokens, v, start, datalab, ntharr);
 	} else if (cur->type == TT_LITERAL){
 		// Literal value interpreted as memory location
@@ -4469,26 +4579,29 @@ void eval_strict_composite(Module *mod, Vector *out, Vector *tokens, Variable *v
 	size_t subvar = 0;
 	bool first = true;
 	for (start++; start < last; start++) {
-		if (first) {
-			Variable *sub = vect_get(&v->type->members, subvar);
-			if (sub == NULL) {
-				// Reached end of subvars, discard rest
-				start = last;
-				continue;
-			} else if (_var_ptr_type(sub) > 1) {
-				eval_strict_arr(mod, out, tokens, sub, start, datalab, ntharr);
-			} else if (_var_ptr_type(sub) > PTYPE_NONE) {
-				eval_strict_ptr(mod, out, tokens, sub, start, datalab, ntharr);
-			} else if (!is_inbuilt(sub->type->name)) {
-				eval_strict_composite(mod, out, tokens, sub, start, datalab, ntharr);
-			} else {
-				eval_strict_literal(out, tokens, sub, start);
-			}
-			subvar++;
-		}
-
 		Token *cur = vect_get(tokens, start);
-		
+		if(tok_str_eq(cur, ",")) {
+			first = true;
+		} else {
+			if (first) {
+				Variable *sub = vect_get(&v->type->members, subvar);
+				first = false;
+				if (_var_ptr_type(sub) > 1) {
+					eval_strict_arr(mod, out, tokens, sub, start, datalab, ntharr);
+				} else if (_var_ptr_type(sub) > PTYPE_NONE) {
+					eval_strict_ptr(mod, out, tokens, sub, start, datalab, ntharr);
+				} else if (!is_inbuilt(sub->type->name)) {
+					eval_strict_composite(mod, out, tokens, sub, start, datalab, ntharr);
+				} else {
+					eval_strict_literal(out, tokens, sub, start);
+				}
+				subvar++;
+			}
+
+			if (cur->type == TT_DELIMIT) {
+				start = tnsl_find_closing(tokens, start);
+			}
+		}
 	}
 }
 
@@ -4511,6 +4624,8 @@ void eval_strict(CompData *out, Vector *tokens, Variable *v, size_t start) {
 	}
 
 	vect_push_string(&out->data, vect_as_string(&store));
+	free(datalab);
+	vect_end(&store);
 }
 
 // Compile a top-level definition
@@ -5037,6 +5152,9 @@ void p2_file_loop(
 				}
 				vect_end(&asm_str);
 			}
+		} else if (tok_str_eq(t, "struct")){
+			start += 2;
+			start = tnsl_find_closing(tokens, start);
 		} else if (tnsl_is_def(tokens, start)) {
 			p2_compile_fdef(root, out, tokens, &start);
 		}
