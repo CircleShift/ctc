@@ -1,2 +1,6 @@
 ctc
 out
+
+*.out
+*.asm
+*.o
