@@ -3435,6 +3435,8 @@ void p1_resolve_types(Module *root) {
 
 	for (size_t i = 0; i < root->vars.count; i++) {
 		Variable *v = vect_get(&root->vars, i);
+		// when created, the module was on the stack.  Make sure it is not anymore.
+		v->mod = root;
 		char *n_end = strchr(v->name, ' ');
 
 		if (n_end == NULL) {
@@ -3973,29 +3975,30 @@ Variable _eval_dot(Scope *s, CompData *data, Vector *tokens, size_t start, size_
 		return v;
 	}
 	
-	Variable v = {0};
-	v.name = NULL;
+	Variable v = scope_get_var(s, &name);
 
 	// Match with first possible variable
 	start = tnsl_next_non_nl(tokens, start);
 	for (; start < end; start = tnsl_next_non_nl(tokens, start)) {
 		// Try match variable
 
-		v = scope_get_var(s, &name);
-
 		if (v.name != NULL) {
+			art_end(&name);
+			name = art_from_str("", '.');
 			break;
 		}
 
 		// Try expand artifact, or call
 		t = vect_get(tokens, start);
 		if (tok_str_eq(t, ".")) {
+			start++;
 			t = vect_get(tokens, start);
 			if (t->type != TT_DEFWORD) {
 				printf("ERROR: Expected defword after '.' operator but found \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
 				return v;
 			}
 			art_add_str(&name, t->data);
+			v = scope_get_var(s, &name);
 		} else if (tok_str_eq(t, "(")) {
 			// Call
 			break;

@@ -1,0 +1,7 @@
+/; module Mod
+	int i = 69
+;/
+
+/; main [int]
+	return Mod.i
+;/
