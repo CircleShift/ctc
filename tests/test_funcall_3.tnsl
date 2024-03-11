@@ -1,0 +1,16 @@
+struct Str {
+	int i, j
+}
+
+/; strout [Str]
+	Str out
+	out.i = 60
+	out.j = 9
+	return out
+;/
+
+/; main [int]
+	Str out
+	out = strout()
+	return out.j + out.i
+;/

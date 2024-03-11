@@ -932,7 +932,7 @@ void var_op_pure_set(CompData *out, Variable *store, Variable *from) {
 	if (store->location == LOC_LITL) {
 		printf("ERROR: Can't set a literal value by pure set.\n");
 		return;
-	} else if (_var_pure_size(from) != _var_pure_size(store)) {
+	} else if (_var_pure_size(from) != _var_pure_size(store) && from->location != LOC_LITL) {
 		printf("ERROR: Can't set one variable to the other as their pure sizes are different!\n");
 		return;
 	}
@@ -973,7 +973,7 @@ void var_op_pure_set(CompData *out, Variable *store, Variable *from) {
 		vect_push_free_string(&out->text, int_to_str(_var_pure_size(from)));
 		vect_push_string(&out->text, "\n");
 		
-		vect_push_string(&out->text, "\tmovsb ; Move struct complete\n\n");
+		vect_push_string(&out->text, "\trep movsb ; Move struct complete\n\n");
 	} else if (from->location < 1 && store->location < 1) {
 		// Both in memory, use rsi as temp storage for move
 		vect_push_string(&out->text, "\tmov ");
@@ -1307,7 +1307,7 @@ void var_op_set(CompData *out, Variable *store, Variable *from) {
 		} else {
 			vect_push_free_string(&out->text, int_to_str(_var_size(store)));
 		}
-		vect_push_string(&out->text, "\n\tmovsb ; Complete struct move\n\n");
+		vect_push_string(&out->text, "\n\trep movsb ; Complete struct move\n\n");
 	}
 }
 
@@ -3326,6 +3326,55 @@ void p1_resolve_func_types(Module *root, Function *func) {
 	if (method)
 		reg = 2;
 	int stack_accum = 0;
+	for (size_t i = 0; i < func->outputs.count; i++) {
+		Variable *var = vect_get(&func->outputs, i);
+		Artifact rtn = art_from_str(var->name, '.');
+		Type *t = mod_find_type(root, &rtn);
+
+		if(t == NULL) {
+			char *rt = art_to_str(&rtn, '.');
+			printf("ERROR: Could not find type %s for function %s\n\n", rt, func->name);
+			free(rt);
+			art_end(&rtn);
+			break;
+		}
+
+		art_end(&rtn);
+
+		Vector name = vect_from_string(t->name);
+		free(var->name);
+		var->name = vect_as_string(&name);
+		var->type = t;
+
+		// Check where the output should be stored
+		if (
+				(
+					// is struct
+					!is_inbuilt(var->type->name)
+					&& // and not by reference
+					var->ptr_chain.count == 0
+				)
+				|| // or we are an array with predefined size (stack array)
+				_var_ptr_type(var) > 1
+				|| // or we ran out of registers
+				reg > 6
+			) {
+			// The output should be stored on the stack
+			var->location = LOC_STCK;
+			stack_accum += _var_pure_size(var);
+			var->offset = stack_accum;
+		} else {
+			// The output should be stored in a register
+			var->location = reg;
+			var->offset = 0;
+			reg++;
+		}
+	}
+
+	reg = 1;
+	if (method)
+		reg = 2;
+	// Stack accum not reset because the stack would get clobbered
 	for (size_t i = 0; i < func->inputs.count; i++) {
 		Variable *var = vect_get(&func->inputs, i);
 		char *n_end = strchr(var->name, ' ');
@@ -3370,8 +3419,8 @@ void p1_resolve_func_types(Module *root, Function *func) {
 			) {
 			// The output should be stored on the stack
 			var->location = LOC_STCK;
-			var->offset = stack_accum;
 			stack_accum += _var_pure_size(var);
+			var->offset = stack_accum;
 		} else {
 			// The output should be stored in a register
 			var->location = reg;
@@ -3379,54 +3428,21 @@ void p1_resolve_func_types(Module *root, Function *func) {
 			reg++;
 		}
 	}
-	
-	reg = 1;
-	if (method)
-		reg = 2;
-	// Stack accum not reset because the stack would get clobbered
-	for (size_t i = 0; i < func->outputs.count; i++) {
+
+	// Stack variables will be pushed on in reverse order for a call
+	// so we need to invert all the variable offsets
+	// we are adding 8 here because we assume a return pointer right where
+	// rbp is located
+	for(size_t i = 0; i < func->outputs.count; i++) {
 		Variable *var = vect_get(&func->outputs, i);
-		Artifact rtn = art_from_str(var->name, '.');
-		Type *t = mod_find_type(root, &rtn);
+		if(var->location == LOC_STCK)
+			var->offset = 8 + stack_accum - var->offset;
+	}
 
-		if(t == NULL) {
-			char *rt = art_to_str(&rtn, '.');
-			printf("ERROR: Could not find type %s for function %s\n\n", rt, func->name);
-			free(rt);
-			art_end(&rtn);
-			break;
-		}
-
-		art_end(&rtn);
-
-		Vector name = vect_from_string(t->name);
-		free(var->name);
-		var->name = vect_as_string(&name);
-		var->type = t;
-
-		// Check where the output should be stored
-		if (
-				(
-					// is struct
-					!is_inbuilt(var->type->name)
-					&& // and not by reference
-					var->ptr_chain.count == 0
-				)
-				|| // or we are an array with predefined size (stack array)
-				_var_ptr_type(var) > 1
-				|| // or we ran out of registers
-				reg > 6
-			) {
-			// The output should be stored on the stack
-			var->location = LOC_STCK;
-			var->offset = stack_accum;
-			stack_accum += _var_pure_size(var);
-		} else {
-			// The output should be stored in a register
-			var->location = reg;
-			var->offset = 0;
-			reg++;
-		}
+	for(size_t i = 0; i < func->inputs.count; i++) {
+		Variable *var = vect_get(&func->inputs, i);
+		if(var->location == LOC_STCK)
+			var->offset = 8 + stack_accum - var->offset;
 	}
 }
 
@@ -3728,14 +3744,24 @@ void scope_free_tmp(Scope *s, CompData *data, Variable *v) {
 }
 
 void scope_free_to(Scope *s, CompData *data, Variable *v) {
+	bool freed = false;
+
 	for (size_t i = s->stack_vars.count; i > 0; i--) {
-		Variable *cur = vect_get(&s->stack_vars, i);
+		Variable *cur = vect_get(&s->stack_vars, i - 1);
 		if (cur->offset < v->offset) {
 			var_end(cur);
 			vect_pop(&s->stack_vars);
+			freed = true;
 		} else {
 			break;
 		}
+	}
+
+	if (freed) {
+		int next_loc = _scope_next_stack_loc(s, 0);
+		vect_push_string(&data->text, "\tlea rsp, [rbp - ");
+		vect_push_free_string(&data->text, int_to_str(-next_loc));
+		vect_push_string(&data->text, "]; Scope free to\n");
 	}
 }
 
@@ -4021,16 +4047,16 @@ Variable _eval_call(Scope *s, CompData *data, Vector *tokens, Function *f, Varia
 
 	// First, load all stack-based outputs onto the stack
 	// and set the output
-	for (size_t i = f->outputs.count; i > 0; i--) {
-		Variable *cur = vect_get(&f->outputs, i - 1);
+	for (size_t i = 0; i < f->outputs.count; i++) {
+		Variable *cur = vect_get(&f->outputs, i);
 		if (cur->location == LOC_STCK) {
 			Variable store = scope_mk_stmp(s, data, cur);
-			if (i == 1) {
+			if (i == 0) {
 				out = store;
 			} else {
 				var_end(&store);
 			}
-		} else if (i == 1) {
+		} else if (i == 0) {
 			out = var_copy(cur);
 		}
 	}
@@ -4040,8 +4066,8 @@ Variable _eval_call(Scope *s, CompData *data, Vector *tokens, Function *f, Varia
 	size_t pstart = start + 1;
 	size_t pend = start + 1;
 
-	for(size_t i = f->inputs.count; i > 0; i--) {
-		Variable *cur = vect_get(&f->outputs, i - 1);
+	for(size_t i = 0; i < f->inputs.count; i++) {
+		Variable *cur = vect_get(&f->inputs, i);
 
 		// preprocess, find end of current param
 		while (pend < max) {
@@ -4075,11 +4101,25 @@ Variable _eval_call(Scope *s, CompData *data, Vector *tokens, Function *f, Varia
 	Vector inputs = vect_init(sizeof(Variable));
 	Variable inpin = scope_get_stack_pin(s);
 
-	pstart = start;
-	pend = start;
+	// handle self for methods
+	if (self != NULL) {
+		Variable from = {0};
+		if (_var_ptr_type(self) == PTYPE_NONE) {
+			var_op_reference(data, &from, self);
+		} else
+			from = var_copy(self);
 
-	for(size_t i = f->inputs.count; i > 0; i--) {
-		Variable *cur = vect_get(&f->outputs, i - 1);
+		Variable set = scope_mk_stmp(s, data, self);
+		var_op_pure_set(data, &set, &from);
+		var_end(&from);
+		vect_push(&inputs, &set);
+	}
+
+	pstart = start + 1;
+	pend = start + 1;
+
+	for(size_t i = 0; i < f->inputs.count; i++) {
+		Variable *cur = vect_get(&f->inputs, i);
 
 		// preprocess, find end of current param
 		while (pend < max) {
@@ -4110,13 +4150,13 @@ Variable _eval_call(Scope *s, CompData *data, Vector *tokens, Function *f, Varia
 		}
 	}
 
-	// Fourth, move all register based parameters into their correct registers
+	// Fifth, move all register based parameters into their correct registers
 	for(size_t i = 0; i < inputs.count; i++) {
 		Variable *cur = vect_get(&inputs, i);
 
 		// create tmp var
 		Variable set = var_copy(cur);
-		set.location = inputs.count - i;
+		set.location = i + 1;
 
 		// eval and set
 		var_op_pure_set(data, &set, cur);
@@ -4127,23 +4167,21 @@ Variable _eval_call(Scope *s, CompData *data, Vector *tokens, Function *f, Varia
 	vect_end(&inputs);
 
 	// set stack to where it needs to be for call
+	scope_free_to(s, data, &inpin);
 	if (inpin.name != NULL) {
-		scope_free_to(s, data, &inpin);
 		var_end(&inpin);
 	}
 
-	// Fifth, make call
+	// Sixth, make call
 	vect_push_string(&data->text, "\tcall ");
 	vect_push_free_string(&data->text, mod_label_prefix(f->module));
 	vect_push_string(&data->text, f->name);
 	vect_push_string(&data->text, "; Function call\n\n");
 
-	// Sixth, return output
+	// Seventh, return output
+	scope_free_to(s, data, &pin);
 	if (out.name != NULL) {
-		scope_free_to(s, data, &pin);
 		var_end(&pin);
-	} else {
-		scope_free_all_tmp(s, data);
 	}
 	return out;
 }

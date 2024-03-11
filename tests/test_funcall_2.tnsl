@@ -1,0 +1,12 @@
+/; ret_a [int]
+	return 9
+;/
+
+/; ret_b (int i, j) [int]
+	return i + j
+;/
+
+/; main [int]
+	int i = ret_a()
+	return ret_b(60, i)
+;/

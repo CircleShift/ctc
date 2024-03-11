@@ -1,0 +1,12 @@
+/; main [int]
+
+	/; if (false)
+		return 1
+	;; else if (1 == 0)
+		return 2
+	;; else
+		return 69
+	;/
+
+	return 0
+;/
