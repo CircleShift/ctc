@@ -1,0 +1,11 @@
+
+int out = 0
+
+/; func
+	out = 69
+;/
+
+/; main [int]
+	func()
+	return out
+;/

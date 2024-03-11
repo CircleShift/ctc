@@ -16,6 +16,7 @@ struct Vector {
 /; main [int]
 
 	Vector a
+	
 	a.init()
 
 	return a.size

@@ -1836,19 +1836,23 @@ void *mod_find_rec(Module *mod, Artifact *art, size_t sub, int find_type) {
 		char **to_check = vect_get(art, sub);
 
 		Vector e_check = vect_from_string("@@"); // In case it is a variable inside an enum
+		Vector t_check = vect_from_string("@"); // In case it is a function inside a method block
 		vect_push_string(&e_check, *to_check);
 		vect_as_string(&e_check);
+		vect_push_string(&t_check, *to_check);
+		vect_as_string(&t_check);
 		
 		void *out = NULL;
 		for (size_t i = 0; i < mod->submods.count; i++) {
 			Module *m = vect_get(&(mod->submods), i);
-			if (strcmp(m->name, *to_check) == 0 || strcmp(m->name, e_check.data) == 0) {
+			if (strcmp(m->name, *to_check) == 0 || strcmp(m->name, e_check.data) == 0 || strcmp(m->name, t_check.data)) {
 				out = mod_find_rec(m, art, sub + 1, find_type);
 				break;
 			}
 		}
 
 		vect_end(&e_check);
+		vect_end(&t_check);
 
 		if (out != NULL)
 			return out;
@@ -3061,7 +3065,7 @@ void p1_parse_method(Module *root, Vector *tokens, size_t *pos) {
 		return;
 	}
 
-	Vector mod_name = vect_from_string("_#");
+	Vector mod_name = vect_from_string("@");
 	vect_push_string(&mod_name, t->data);
 	Module out = mod_init(vect_as_string(&mod_name), root, root->exported);
 	vect_end(&mod_name);
@@ -3316,7 +3320,11 @@ void p1_size_type (Module *root, Type *t) {
 
 void p1_resolve_func_types(Module *root, Function *func) {
 
+	bool method = root->name != NULL && strlen(root->name) > 0 && root->name[0] == '@';
+
 	int reg = 1;
+	if (method)
+		reg = 2;
 	int stack_accum = 0;
 	for (size_t i = 0; i < func->inputs.count; i++) {
 		Variable *var = vect_get(&func->inputs, i);
@@ -3373,6 +3381,8 @@ void p1_resolve_func_types(Module *root, Function *func) {
 	}
 	
 	reg = 1;
+	if (method)
+		reg = 2;
 	// Stack accum not reset because the stack would get clobbered
 	for (size_t i = 0; i < func->outputs.count; i++) {
 		Variable *var = vect_get(&func->outputs, i);
@@ -3717,6 +3727,30 @@ void scope_free_tmp(Scope *s, CompData *data, Variable *v) {
 	var_end(v);
 }
 
+void scope_free_to(Scope *s, CompData *data, Variable *v) {
+	for (size_t i = s->stack_vars.count; i > 0; i--) {
+		Variable *cur = vect_get(&s->stack_vars, i);
+		if (cur->offset < v->offset) {
+			var_end(cur);
+			vect_pop(&s->stack_vars);
+		} else {
+			break;
+		}
+	}
+}
+
+Variable scope_get_stack_pin(Scope *s) {
+	Variable out = {0};
+	out.offset = 0;
+
+	if (s->stack_vars.count > 0) {
+		Variable *last = vect_get(&s->stack_vars, s->stack_vars.count - 1);
+		out = var_copy(last);
+	}
+
+	return out;
+}
+
 void scope_free_all_tmp(Scope* s, CompData *data) {
 	for (size_t i = 0; i < s->reg_vars.count; i++) {
 		Variable *to_free = vect_get(&s->reg_vars, i);
@@ -3749,6 +3783,26 @@ void scope_free_all_tmp(Scope* s, CompData *data) {
 		vect_push_free_string(&data->text, int_to_str(-new_top));
 		vect_push_string(&data->text, "]; All tmp free\n");
 	}
+}
+
+// Create a tmp variable specifically on the stack
+Variable scope_mk_stmp(Scope *s, CompData *data, Variable *v)
+{
+	Variable out = var_copy(v);
+
+	Vector name = vect_from_string("#tmp");
+	out.name = vect_as_string(&name);
+	
+	int loc = _scope_next_stack_loc(s, _var_pure_size(v));
+	out.location = LOC_STCK;
+	out.offset = loc;
+	
+	vect_push_string(&data->text, "\tlea rsp, [rbp - ");
+	vect_push_free_string(&data->text, int_to_str(-loc));
+	vect_push_string(&data->text, "]; Stack variable\n");
+
+	vect_push(&s->stack_vars, &out);
+	return var_copy(&out);
 }
 
 // Generate a new variable in the scope
@@ -3956,13 +4010,142 @@ int op_order(Token *t) {
 }
 
 
+Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t end);
 
 Variable _eval_call(Scope *s, CompData *data, Vector *tokens, Function *f, Variable *self, size_t start) {
-	Variable v = {0};
-	v.name = NULL;
-	// TODO
 	
-	return v;
+	Variable out = {0};
+	out.name = NULL;
+
+	Variable pin = scope_get_stack_pin(s);
+
+	// First, load all stack-based outputs onto the stack
+	// and set the output
+	for (size_t i = f->outputs.count; i > 0; i--) {
+		Variable *cur = vect_get(&f->outputs, i - 1);
+		if (cur->location == LOC_STCK) {
+			Variable store = scope_mk_stmp(s, data, cur);
+			if (i == 1) {
+				out = store;
+			} else {
+				var_end(&store);
+			}
+		} else if (i == 1) {
+			out = var_copy(cur);
+		}
+	}
+
+	// Second, evaluate all stack-based parameters
+	int max = tnsl_find_closing(tokens, start);
+	size_t pstart = start + 1;
+	size_t pend = start + 1;
+
+	for(size_t i = f->inputs.count; i > 0; i--) {
+		Variable *cur = vect_get(&f->outputs, i - 1);
+
+		// preprocess, find end of current param
+		while (pend < max) {
+			Token *psep = vect_get(tokens, pend);
+			if (tok_str_eq(psep, "}") || tok_str_eq(psep, ",")) {
+				break;
+			} else if (psep->type == TT_DELIMIT) {
+				pend = tnsl_find_closing(tokens, pend);
+			}
+			pend++;
+		}
+
+		if (cur->location == LOC_STCK) {
+			// create tmp var
+			Variable set = scope_mk_stmp(s, data, cur);
+			Variable from = _eval(s, data, tokens, pstart, pend);
+			// eval and set
+			var_op_pure_set(data, &set, &from);
+			scope_free_to(s, data, &set);
+			var_end(&from);
+			var_end(&set);
+		}
+
+		if (pend < max) {
+			pend = pend + 1;
+			pstart = pend;
+		}
+	}
+
+	// Third, evaluate all register based parameters
+	Vector inputs = vect_init(sizeof(Variable));
+	Variable inpin = scope_get_stack_pin(s);
+
+	pstart = start;
+	pend = start;
+
+	for(size_t i = f->inputs.count; i > 0; i--) {
+		Variable *cur = vect_get(&f->outputs, i - 1);
+
+		// preprocess, find end of current param
+		while (pend < max) {
+			Token *psep = vect_get(tokens, pend);
+			if (tok_str_eq(psep, "}") || tok_str_eq(psep, ",")) {
+				break;
+			} else if (psep->type == TT_DELIMIT) {
+				pend = tnsl_find_closing(tokens, pend);
+			}
+			pend++;
+		}
+
+		if (cur->location > 0) {
+			// create tmp var
+			Variable set = scope_mk_stmp(s, data, cur);
+			// eval and set
+			Variable from = _eval(s, data, tokens, pstart, pend);
+			var_op_pure_set(data, &set, &from);
+			// cleanup
+			scope_free_to(s, data, &set);
+			var_end(&from);
+			vect_push(&inputs, &set);
+		}
+
+		if (pend < max) {
+			pend = pend + 1;
+			pstart = pend;
+		}
+	}
+
+	// Fourth, move all register based parameters into their correct registers
+	for(size_t i = 0; i < inputs.count; i++) {
+		Variable *cur = vect_get(&inputs, i);
+
+		// create tmp var
+		Variable set = var_copy(cur);
+		set.location = inputs.count - i;
+
+		// eval and set
+		var_op_pure_set(data, &set, cur);
+
+		// cleanup
+		var_end(cur);
+	}
+	vect_end(&inputs);
+
+	// set stack to where it needs to be for call
+	if (inpin.name != NULL) {
+		scope_free_to(s, data, &inpin);
+		var_end(&inpin);
+	}
+
+	// Fifth, make call
+	vect_push_string(&data->text, "\tcall ");
+	vect_push_free_string(&data->text, mod_label_prefix(f->module));
+	vect_push_string(&data->text, f->name);
+	vect_push_string(&data->text, "; Function call\n\n");
+
+	// Sixth, return output
+	if (out.name != NULL) {
+		scope_free_to(s, data, &pin);
+		var_end(&pin);
+	} else {
+		scope_free_all_tmp(s, data);
+	}
+	return out;
 }
 
 Variable _eval_dot(Scope *s, CompData *data, Vector *tokens, size_t start, size_t end) {
@@ -4070,10 +4253,6 @@ Variable _eval_dot(Scope *s, CompData *data, Vector *tokens, size_t start, size_
 	// TODO: Dot eval post processing (calls to methods, dereference, and members of structs)
 
 	return v;
-}
-
-Variable _eval_composite() {
-
 }
 
 Variable _eval_literal(Scope *s, CompData *data, Vector *tokens, size_t literal) {
@@ -4204,7 +4383,9 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 					printf("Unexpected tokens after composite value (%d:%d)\n\n", d->line, d->col);
 					return out;
 				}
-				return _eval_composite();
+				printf("Composite values in blocks are not yet supported, sorry (%d;%d)\n\n", d->line, d->col);
+				p2_error = true;
+				return out;
 			case '/':
 				printf("Anonymous blocks as values are not yet supported, sorry (%d:%d)\n\n", d->line, d->col);
 			default:
@@ -4760,11 +4941,25 @@ void p2_compile_control(Scope *s, CompData *out, Vector *tokens, size_t *pos) {
 
 // Handles the 'self' variable in the case where the function is in a method block.
 void _p2_handle_method_scope(Module *root, CompData *out, Scope *fs, Function *f) {
+	
+	// load type for method
 	Artifact t_art = art_from_str((root->name + 1), '.');
 	Type *t = mod_find_type(root, &t_art);
 	art_end(&t_art);
-	Variable self = var_init("self", t);
 	
+	// Create self var
+	Variable self = var_init("self", t);
+	self.location = 1;
+	int pt = PTYPE_REF;
+	vect_push(&self.ptr_chain, &pt);
+	
+	// Add to scope
+	Variable set = scope_mk_var(fs, out, &self);
+	var_op_pure_set(out, &set, &self);
+	
+	// clean up vars
+	var_end(&self);
+	var_end(&set);
 }
 
 void _p2_func_scope_init(Module *root, CompData *out, Scope *fs, Function *f) {
@@ -4853,7 +5048,7 @@ void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *po
 	// Scope init
 	Scope fs = scope_init(t->data, root);
 	_p2_func_scope_init(root, out, &fs, f);
-	if(root->name[0] == '@') {
+	if(root->name != NULL && strlen(root->name) > 0 && root->name[0] == '@') {
 		_p2_handle_method_scope(root, out, &fs, f);
 	}
 
