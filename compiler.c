@@ -3457,6 +3457,9 @@ void p1_resolve_types(Module *root) {
 
 	for(size_t i = 0; i < root->funcs.count; i++) {
 		p1_resolve_func_types(root, vect_get(&root->funcs, i));
+		// when created, the function was on the stack. Make sure it is not anymore
+		Function *f = vect_get(&root->funcs, i);
+		f->module = root;
 	}
 
 	for (size_t i = 0; i < root->vars.count; i++) {
@@ -4109,7 +4112,7 @@ Variable _eval_call(Scope *s, CompData *data, Vector *tokens, Function *f, Varia
 		} else
 			from = var_copy(self);
 
-		Variable set = scope_mk_stmp(s, data, self);
+		Variable set = scope_mk_stmp(s, data, &from);
 		var_op_pure_set(data, &set, &from);
 		var_end(&from);
 		vect_push(&inputs, &set);
@@ -4243,7 +4246,7 @@ Variable _eval_dot(Scope *s, CompData *data, Vector *tokens, size_t start, size_
 				}
 				v = _eval_call(s, data, tokens, f, NULL, start);
 			} else {
-				Function *m = mod_find_func(v.mod, &name);
+				Function *m = mod_find_func(v.type->module, &name);
 				if (m == NULL) {
 					printf("ERROR: Could not find function \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
 					art_end(&name);
@@ -4280,7 +4283,7 @@ Variable _eval_dot(Scope *s, CompData *data, Vector *tokens, size_t start, size_
 				var_end(&v);
 				v = m;
 			} else if (tok_str_eq(next, "(")) {
-				art_add_str(&name, next->data);
+				art_add_str(&name, m_name);
 			}
 			start++;
 		}
