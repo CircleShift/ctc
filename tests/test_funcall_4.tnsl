@@ -1,0 +1,16 @@
+struct Dummy {
+	int i, j
+}
+
+/; inout (Dummy in) [Dummy]
+	in.i = 68
+	return in
+;/
+
+/; main [int]
+	Dummy a
+	a.i = 1
+	a.j = 1
+	a = inout(a)
+	return a.i + a.j
+;/

@@ -9,8 +9,11 @@ struct Str {
 	return out
 ;/
 
+/; strin (Str in) [int]
+	return in.i
+;/
+
 /; main [int]
-	Str out
-	out = strout()
-	return out.j + out.i
+	Str out = strout()
+	return strin(out) + out.j
 ;/
