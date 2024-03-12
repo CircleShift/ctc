@@ -1,0 +1,15 @@
+
+/; set (int` i)
+	i = i + 9
+;/
+
+/; set_b (~int j)
+	j` = j` + 60
+;/
+
+/; main [int]
+	int a = 0
+	set(~a)
+	set_b(~a)
+	return a
+;/
