@@ -1,0 +1,17 @@
+struct Vector {
+	~void data,
+	int count, size, _elsz
+}
+
+/; method Vector
+	
+	/; init (int elsz)
+		self._elsz = elsz
+	;/
+;/
+
+/; main [int]
+	Vector a
+	a.init(1)
+	return a._elsz
+;/

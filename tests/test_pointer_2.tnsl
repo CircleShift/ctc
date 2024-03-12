@@ -1,0 +1,6 @@
+/; main [int]
+	int i = 0
+	~int j = ~i
+	j` = 69
+	return i
+;/

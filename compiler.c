@@ -267,6 +267,16 @@ void art_add_art(Artifact *a, Artifact *b) {
 	}
 }
 
+// Weather the string str is contained in the artifact
+bool art_contains(Artifact *a, char *str) {
+	for (size_t i = 0; i < a->count; i++) {
+		char **cur = vect_get(a, i);
+		if (strcmp(str, *cur) == 0)
+			return true;
+	}
+	return false;
+}
+
 // Frees all strings in the artifact,
 // then calls vect_end
 void art_end(Artifact *art) {
@@ -2636,6 +2646,25 @@ int tnsl_find_closing(Vector *tokens, size_t cur) {
 	return -1;
 }
 
+Vector tnsl_find_all_pointers(Vector *tokens, size_t start, size_t end) {
+	Vector out = vect_init(sizeof(char*));
+	
+	for(start++;start < end; start++) {
+		Token *cur = vect_get(tokens, start);
+		if (tok_str_eq(cur, "~")) {
+			start++;
+			cur = vect_get(tokens, start);
+			if(cur->type == TT_DEFWORD) {
+				Vector data = vect_from_string(cur->data);
+				char *str = vect_as_string(&data);
+				vect_push(&out, &str);
+			}
+		}
+	}
+
+	return out;
+}
+
 char tnsl_unquote_char(char *str) {
 	if(str == NULL)
 		return 0;
@@ -3696,6 +3725,23 @@ Variable scope_mk_tmp(Scope *s, CompData *data, Variable *v) {
 	return var_copy(&out);
 }
 
+// Create a new variable on the stack
+// MAKE SURE ALL TMP STACK IS FREED BEFORE THIS IS DONE
+Variable scope_mk_stack(Scope *s, CompData *data, Variable *v) {
+	Variable out = var_copy(v);
+	int loc = _scope_next_stack_loc(s, _var_pure_size(v));
+	
+	out.location = LOC_STCK;
+	out.offset = loc;
+
+	vect_push_string(&data->text, "\tlea rsp, [rbp - ");
+	vect_push_free_string(&data->text, int_to_str(-loc));
+	vect_push_string(&data->text, "]; Stack variable\n");
+
+	vect_push(&s->stack_vars, &out);
+	return var_copy(&out);
+}
+
 // Checks if a variable is a tmp variable in the scope
 bool scope_is_tmp(Variable *v) {
 	return strcmp(v->name, "#tmp") == 0;
@@ -4444,14 +4490,15 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 
 	if (op_pos == start) {
 		if (op_token->data[0] == '~') {
-			if (rhs.location > 0 && rhs.ptr_chain.count < 1) {
-				// Move to stack
-			}
 			Variable store;
 			var_op_reference(data, &store, &rhs);
 			var_end(&rhs);
 			rhs = scope_mk_tmp(s, data, &store);
 			var_end(&store);
+			
+			int *ptype = vect_get(&rhs.ptr_chain, rhs.ptr_chain.count - 1);
+			*ptype = PTYPE_PTR;
+			
 			return rhs;
 		} else {
 			printf("ERROR: Unexpected prefix token\n");
@@ -4908,7 +4955,7 @@ void p2_compile_fdef(Module *root, CompData *out, Vector *tokens, size_t *pos) {
 }
 
 // Compiles a variable definition inside a function block
-void p2_compile_def(Scope *s, CompData *out, Vector *tokens, size_t *pos) {
+void p2_compile_def(Scope *s, CompData *out, Vector *tokens, size_t *pos, Vector *p_list) {
 
 	Variable type = tnsl_parse_type(tokens, *pos);
 	*pos = type.location;
@@ -4932,7 +4979,12 @@ void p2_compile_def(Scope *s, CompData *out, Vector *tokens, size_t *pos) {
 			free(type.name);
 			Vector nm = vect_from_string(t->data);
 			type.name = vect_as_string(&nm);
-			Variable tmp = scope_mk_var(s, out, &type);
+			Variable tmp;
+			if (_var_ptr_type(&type) != PTYPE_REF && art_contains(p_list, type.name)) {
+				tmp = scope_mk_stack(s, out, &type);
+			} else {
+				tmp = scope_mk_var(s, out, &type);
+			}
 			var_end(&tmp);
 		} else if (t->type == TT_DELIMIT) {
 			*pos = tnsl_find_closing(tokens, *pos);
@@ -4968,7 +5020,7 @@ void p2_compile_enum(Module *root, CompData *out, Vector *tokens, size_t *pos) {
 }
 
 // TODO loop blocks, if blocks, else blocks
-void p2_compile_control(Scope *s, CompData *out, Vector *tokens, size_t *pos) {
+void p2_compile_control(Scope *s, CompData *out, Vector *tokens, size_t *pos, Vector *p_list) {
 	int end = tnsl_find_closing(tokens, *pos);
 	Token *t = vect_get(tokens, *pos);
 	
@@ -5003,7 +5055,7 @@ void _p2_handle_method_scope(Module *root, CompData *out, Scope *fs, Function *f
 	var_end(&set);
 }
 
-void _p2_func_scope_init(Module *root, CompData *out, Scope *fs, Function *f) {
+void _p2_func_scope_init(Module *root, CompData *out, Scope *fs, Function *f, Vector *p_list) {
 	// TODO: decide what happens when a function scope is created
 	
 	// export function if module is exported.
@@ -5033,7 +5085,12 @@ void _p2_func_scope_init(Module *root, CompData *out, Scope *fs, Function *f) {
 	// Load function parameters into expected registers (we assume the stack frame was set up proprely by caller)
 	for (size_t i = 0; i < f->inputs.count; i++) {
 		Variable *input =  vect_get(&f->inputs, i);
-		Variable set = scope_mk_var(fs, out, input);
+		Variable set;
+		if (_var_ptr_type(input) != PTYPE_REF && art_contains(p_list, input->name)) {
+			set = scope_mk_stack(fs, out, input);
+		} else {
+			set = scope_mk_var(fs, out, input);
+		}
 		var_op_pure_set(out, &set, input);
 		var_end(&set);
 	}
@@ -5065,6 +5122,8 @@ void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *po
 		return;
 	}
 
+	Vector p_list = tnsl_find_all_pointers(tokens, *pos, end);
+
 	Token *t = vect_get(tokens, *pos);
 	while (t != NULL && *pos < (size_t)end && t->type != TT_DEFWORD) {
 		t = vect_get(tokens, ++(*pos));
@@ -5088,7 +5147,7 @@ void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *po
 
 	// Scope init
 	Scope fs = scope_init(t->data, root);
-	_p2_func_scope_init(root, out, &fs, f);
+	_p2_func_scope_init(root, out, &fs, f, &p_list);
 	if(root->name != NULL && strlen(root->name) > 0 && root->name[0] == '@') {
 		_p2_handle_method_scope(root, out, &fs, f);
 	}
@@ -5109,7 +5168,7 @@ void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *po
 			size_t b_open = *pos;
 			
 			if(tnsl_block_type(tokens, *pos) == BT_CONTROL) {
-				p2_compile_control(&fs, out, tokens, pos);
+				p2_compile_control(&fs, out, tokens, pos, &p_list);
 			} else {
 				printf("ERROR: Only control blocks (if, else, loop, switch) are valid inside functions (%d:%d)\n\n", t->line, t->col);
 				p2_error = true;
@@ -5154,7 +5213,7 @@ void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *po
 				}
 			}
 		} else if (tnsl_is_def(tokens, *pos)) {
-			p2_compile_def(&fs, out, tokens, pos);
+			p2_compile_def(&fs, out, tokens, pos, &p_list);
 		} else {
 			// TODO: figure out eval parameter needs (maybe needs start and end size_t?)
 			// and how eval will play into top level defs (if at all)
@@ -5170,6 +5229,7 @@ void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *po
 
 	_p2_func_scope_end(out, &fs);
 	scope_end(&fs);
+	art_end(&p_list);
 	*pos = end;
 }
 
