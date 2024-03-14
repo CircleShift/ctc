@@ -1,14 +1,11 @@
 :import "c_wrap_linux.tnsl"
+:import "vector.tnsl"
 
-~uint8 str_a = "Hello World\n\0"
-~uint8 str_b = "!\n\0"
+/; main [int]
 
-/; main (int argc, ~~uint8 argv) [int]
-	_printf(str_a)
+	Vector a
+	a.init(1)
 
-	/; if (argc > 2)
-		_printf(str_b)
-	;/
-	
 	return 0
 ;/
+

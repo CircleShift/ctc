@@ -1,0 +1,32 @@
+struct Vector {
+	~void data,
+	int
+		size,
+		count,
+		_elsz
+}
+
+int VECT_DEFAULT_SIZE = 4
+
+/; method Vector
+	
+	/; init (int elsz)
+		self._elsz = elsz
+		self.size = VECT_DEFAULT_SIZE
+		self.data = _alloc(elsz * self.size)
+		self.count = 0
+	;/
+
+	/; get (int index) [~void]
+		return self.data
+	;/
+
+	/; end
+		_delete(self.data)
+		self.size = 0
+		self._elsz = 0
+		self.count = 0
+	;/
+
+;/
+
