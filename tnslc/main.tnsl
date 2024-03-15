@@ -5,6 +5,10 @@
 
 	Vector a
 	a.init(1)
+	
+	
+
+	a.end()
 
 	return 0
 ;/

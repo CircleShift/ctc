@@ -1,3 +1,4 @@
+# Define vector struct
 struct Vector {
 	~void data,
 	int
@@ -6,21 +7,75 @@ struct Vector {
 		_elsz
 }
 
+# Consts used in impl
 int VECT_DEFAULT_SIZE = 4
+int VECT_MAX_GROW = 128
 
+# Methods on the struct
 /; method Vector
 	
+	# Initialize a new vector with elements
+	# 'elsz' bytes long
 	/; init (int elsz)
-		self._elsz = elsz
 		self.size = VECT_DEFAULT_SIZE
-		self.data = _alloc(elsz * self.size)
+		self._elsz = elsz
 		self.count = 0
+		self.data = _alloc(elsz * VECT_DEFAULT_SIZE)
 	;/
 
+	# Grow the size of the vector by 'size' elements
+	/; _grow (int size)
+		/; if (size > VECT_MAX_GROW)
+			size = VECT_MAX_GROW
+		;/
+
+		self.size = self.size + size
+		self.data = _realloc(self.data, self.size * self._elsz)
+	;/
+
+	# Shrink the size of the vector by 'size' elements
+	/; _shrink (int size)
+		/; if (self.size - size < 0)
+			self.size = 1
+		;; else
+			self.size = self.size - size
+		;/
+
+		/; if (self.count < self.size)
+			self.count = self.size
+		;/
+
+		self.data = _realloc(self.data, self.size * self._elsz)
+	;/
+
+	# Push an element onto the end of the vector
+	/; push (~void data)
+		/; if (count == size - 1)
+			self._grow(self.size)
+		;/
+
+		/; loop (int i = 0; i < self._elsz) [i++]
+			(self.data + i)` = (data + i)`
+		;/
+
+		self.count++
+	;/
+
+	# Pop an element off of the end of the vector
+	/; pop
+		self.count--
+
+		/; if (self.count < self.size / 2)
+			self._shrink(self.size / 3)
+		;/
+	;/
+
+	# Get a pointer to the start of an element in the vector
 	/; get (int index) [~void]
 		return self.data
 	;/
 
+	# Free all memory associated with the vector
 	/; end
 		_delete(self.data)
 		self.size = 0
