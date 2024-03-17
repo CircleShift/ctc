@@ -1846,7 +1846,7 @@ void *mod_find_rec(Module *mod, Artifact *art, size_t sub, int find_type) {
 		char **to_check = vect_get(art, sub);
 
 		Vector e_check = vect_from_string("@@"); // In case it is a variable inside an enum
-		Vector t_check = vect_from_string("@"); // In case it is a function inside a method block
+		Vector t_check = vect_from_string("_#"); // In case it is a function inside a method block
 		vect_push_string(&e_check, *to_check);
 		vect_as_string(&e_check);
 		vect_push_string(&t_check, *to_check);
@@ -1939,7 +1939,7 @@ void mod_full_path_rec(Module *m, Vector *v) {
 		mod_full_path_rec(m->parent, v);
 	
 	char dot = '.';
-	if(v->count > 0 || (v->count == 0 && m->name[0] == '@'))
+	if(v->count > 0)
 		vect_push(v, &dot);
 	vect_push_string(v, m->name);
 }
@@ -3094,7 +3094,7 @@ void p1_parse_method(Module *root, Vector *tokens, size_t *pos) {
 		return;
 	}
 
-	Vector mod_name = vect_from_string("@");
+	Vector mod_name = vect_from_string("_#");
 	vect_push_string(&mod_name, t->data);
 	Module out = mod_init(vect_as_string(&mod_name), root, root->exported);
 	vect_end(&mod_name);
@@ -3290,7 +3290,7 @@ void p1_size_type (Module *root, Type *t) {
 	int sum = 0;
 	t->size = -1;
 
-	Vector tmp = vect_from_string("@");
+	Vector tmp = vect_from_string("_#");
 	vect_push_string(&tmp, t->name);
 	t->module = mod_find_sub(root, vect_as_string(&tmp));
 	vect_end(&tmp);
@@ -3349,7 +3349,7 @@ void p1_size_type (Module *root, Type *t) {
 
 void p1_resolve_func_types(Module *root, Function *func) {
 
-	bool method = root->name != NULL && strlen(root->name) > 0 && root->name[0] == '@';
+	bool method = root->name != NULL && strlen(root->name) > 1 && root->name[0] == '_' && root->name[1] == '#';
 
 	int reg = 1;
 	if (method)
@@ -5030,13 +5030,43 @@ void p2_compile_control(Scope *s, CompData *out, Vector *tokens, size_t *pos, Ve
 		return;
 	}
 
+	*pos += 1;
+	t = vect_get(tokens, *pos);
+
+	if (tok_str_eq(t, "loop")) {
+	} else if (t->type != TT_KEYWORD) {
+		printf("ERROR: Expected control block type ('loop' or 'if'), found \"%s\" (%d:%d)\n", t->data, t->line, t->col);
+		p2_error = true;
+		*pos = end;
+		return;
+	} else {
+		// if block
+	}
+	
+	int build = -1;
+	int rep = -1;
+	for (*pos += 1; *pos < end; *pos += 1) {
+		t = vect_get(tokens, *pos);
+		
+		if (tok_str_eq(t, "(")) {
+			build = *pos;
+			*pos = tnsl_find_closing(tokens, *pos);
+		} else if (tok_str_eq(t, "[")) {
+			rep = *pos;
+			*pos = tnsl_find_closing(tokens, *pos);
+		} else {
+			break;
+		}
+	}
+
+
 }
 
 // Handles the 'self' variable in the case where the function is in a method block.
 void _p2_handle_method_scope(Module *root, CompData *out, Scope *fs, Function *f) {
 	
 	// load type for method
-	Artifact t_art = art_from_str((root->name + 1), '.');
+	Artifact t_art = art_from_str((root->name + 2), '.');
 	Type *t = mod_find_type(root, &t_art);
 	art_end(&t_art);
 	
@@ -5148,7 +5178,7 @@ void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *po
 	// Scope init
 	Scope fs = scope_init(t->data, root);
 	_p2_func_scope_init(root, out, &fs, f, &p_list);
-	if(root->name != NULL && strlen(root->name) > 0 && root->name[0] == '@') {
+	if(root->name != NULL && strlen(root->name) > 1 && root->name[0] == '_' && root->name[1] == '#') {
 		_p2_handle_method_scope(root, out, &fs, f);
 	}
 
@@ -5211,6 +5241,9 @@ void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *po
 					vect_push_string(&out->text, "; User insert asm\n");
 					vect_end(&asm_str);
 				}
+			} else {
+				printf("ERROR: Keyword not implemented inside functions \"%s\" (%d:%d)\n", t->data, t->line, t->col);
+				p2_error = true;
 			}
 		} else if (tnsl_is_def(tokens, *pos)) {
 			p2_compile_def(&fs, out, tokens, pos, &p_list);
@@ -5253,7 +5286,7 @@ void p2_compile_method(Module *root, CompData *out, Vector *tokens, size_t *pos)
 		return;
 	}
 
-	Vector sub_name = vect_from_string("@");
+	Vector sub_name = vect_from_string("_#");
 	vect_push_string(&sub_name, t->data);
 
 	// TODO: method loop
