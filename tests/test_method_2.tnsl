@@ -12,6 +12,6 @@ struct Vector {
 
 /; main [int]
 	Vector a
-	a.init(1)
+	a.init(69)
 	return a._elsz
 ;/

@@ -1,0 +1,12 @@
+/; f_a (int a) [int]
+	return a
+;/
+
+/; f_b (int a, ~int b) [int]
+	return a + b`
+;/
+
+/; main [int]
+	int a = 60
+	return f_b(f_a(1) * 9, ~a)
+;/

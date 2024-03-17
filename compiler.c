@@ -1027,7 +1027,7 @@ void _var_op_set_ptr(CompData *out, Variable *store, Variable *from) {
 		int *cur;
 		for (size_t i = store->ptr_chain.count - 1; i > 0; i--) {
 			cur = vect_get(&store->ptr_chain, i - 1);
-			if (cur == PTYPE_REF) {
+			if (*cur == PTYPE_REF) {
 				vect_push_string(&out->text, "\tmov rdi, [rdi]\n");
 			} else {
 				break;
@@ -1054,7 +1054,7 @@ void _var_op_set_ptr(CompData *out, Variable *store, Variable *from) {
 		int *cur;
 		for (size_t i = from->ptr_chain.count - 1; i > 0; i--) {
 			cur = vect_get(&store->ptr_chain, i - 1);
-			if (cur == PTYPE_REF) {
+			if (*cur == PTYPE_REF) {
 				vect_push_string(&out->text, "\tmov rsi, [rsi]\n");
 			} else {
 				break;
@@ -1544,18 +1544,23 @@ void var_op_mul(CompData *out, Variable *base, Variable *mul) {
 	if(base->type->name[0] == 'i') {
 		// Integer multiplication
 		if (base->location > 0 && mul->location != LOC_LITL) {
+			char *store = _var_get_store(out, base);
+			char *from = _var_get_from(out, base, mul);
+
 			vect_push_string(&out->text, "\timul ");
-			vect_push_free_string(&out->text, _var_get_store(out, base));
+			vect_push_free_string(&out->text, store);
 			vect_push_string(&out->text, ", ");
-			vect_push_free_string(&out->text, _var_get_from(out, base, mul));
+			vect_push_free_string(&out->text, from);
 			vect_push_string(&out->text, "; complete mul\n\n");
 		} else if (base->location > 0) {
 			vect_push_string(&out->text, "\tmov rcx, ");
 			vect_push_free_string(&out->text, int_to_str(mul->offset));
 			vect_push_string(&out->text, "; literal load\n");
 
+			char *store = _var_get_store(out, base);
+
 			vect_push_string(&out->text, "\timul ");
-			vect_push_free_string(&out->text, _var_get_store(out, base));
+			vect_push_free_string(&out->text, store);
 			vect_push_string(&out->text, ", ");
 			vect_push_free_string(&out->text, _op_get_register(3, _var_size(base)));
 			vect_push_string(&out->text, "; complete mul\n\n");
@@ -4134,7 +4139,7 @@ Variable _eval_call(Scope *s, CompData *data, Vector *tokens, Function *f, Varia
 			Variable set = scope_mk_stmp(s, data, cur);
 			Variable from = _eval(s, data, tokens, pstart, pend);
 			// eval and set
-			var_op_pure_set(data, &set, &from);
+			var_op_set(data, &set, &from);
 			scope_free_to(s, data, &set);
 			var_end(&from);
 			var_end(&set);
@@ -4186,7 +4191,7 @@ Variable _eval_call(Scope *s, CompData *data, Vector *tokens, Function *f, Varia
 			Variable set = scope_mk_stmp(s, data, cur);
 			// eval and set
 			Variable from = _eval(s, data, tokens, pstart, pend);
-			var_op_pure_set(data, &set, &from);
+			var_op_set(data, &set, &from);
 			// cleanup
 			scope_free_to(s, data, &set);
 			var_end(&from);
