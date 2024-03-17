@@ -3628,8 +3628,15 @@ char *scope_gen_const_label(Scope *s) {
 
 // Sub scopes
 Scope scope_subscope(Scope *s, char *name) {
-	Scope out = scope_init(name, s->current);
+	Vector n = vect_from_string(name);
+	vect_push_free_string(&n, int_to_str(s->next_const));
+	s->next_const++;
+
+	Scope out = scope_init(vect_as_string(&n), s->current);
 	out.parent = s;
+
+	vect_end(&n);
+
 	return out;
 }
 
@@ -5038,14 +5045,17 @@ void p2_compile_control(Scope *s, CompData *out, Vector *tokens, size_t *pos, Ve
 	*pos += 1;
 	t = vect_get(tokens, *pos);
 
-	if (tok_str_eq(t, "loop")) {
-	} else if (t->type != TT_KEYWORD) {
+	Scope wrap = {0};
+	Scope sub;
+
+	if (tok_str_eq(t, "if")) {
+		wrap = scope_subscope(s);
+		sub = scope_subscope(&wrap);
+	} else if (t->type != TT_KEYWORD || !tok_str_eq(t, "loop")) {
 		printf("ERROR: Expected control block type ('loop' or 'if'), found \"%s\" (%d:%d)\n", t->data, t->line, t->col);
 		p2_error = true;
 		*pos = end;
 		return;
-	} else {
-		// if block
 	}
 	
 	int build = -1;
