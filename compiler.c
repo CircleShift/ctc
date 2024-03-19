@@ -4977,7 +4977,7 @@ void p2_compile_def(Scope *s, CompData *out, Vector *tokens, size_t *pos, Vector
 	art_end(&t_art);
 
 	size_t start = *pos;
-	while (*pos < tokens->count && !tok_str_eq(vect_get(tokens, *pos), "\n")) {
+	while (*pos < tokens->count) {
 		Token *t = vect_get(tokens, *pos);
 		
 		if (start == *pos) {
@@ -4999,7 +4999,7 @@ void p2_compile_def(Scope *s, CompData *out, Vector *tokens, size_t *pos, Vector
 			}
 			var_end(&tmp);
 		} else if (t->type == TT_DELIMIT) {
-			*pos = tnsl_find_closing(tokens, *pos);
+			int chk = tnsl_find_closing(tokens, *pos);
 		} else if (tok_str_eq(t, ",")) {
 			// Split def
 			if(*pos - start > 1) {
@@ -5007,6 +5007,8 @@ void p2_compile_def(Scope *s, CompData *out, Vector *tokens, size_t *pos, Vector
 				var_end(&store);
 			}
 			start = *pos + 1;
+		} else if (tok_str_eq(t, ";") || tok_str_eq(t, "\n")) {
+			break;
 		}
 		*pos += 1;
 	}
@@ -5048,16 +5050,20 @@ void p2_compile_control(Scope *s, CompData *out, Vector *tokens, size_t *pos, Ve
 	Scope wrap = {0};
 	Scope sub;
 
+	// Get 
 	if (tok_str_eq(t, "if")) {
-		wrap = scope_subscope(s);
-		sub = scope_subscope(&wrap);
+		wrap = scope_subscope(s, "wrap");
+		sub = scope_subscope(&wrap, t->data);
 	} else if (t->type != TT_KEYWORD || !tok_str_eq(t, "loop")) {
 		printf("ERROR: Expected control block type ('loop' or 'if'), found \"%s\" (%d:%d)\n", t->data, t->line, t->col);
 		p2_error = true;
 		*pos = end;
 		return;
+	} else {
+		sub = scope_subscope(s, t->data);
 	}
 	
+	// Find pre and post control statements
 	int build = -1;
 	int rep = -1;
 	for (*pos += 1; *pos < end; *pos += 1) {
@@ -5074,7 +5080,58 @@ void p2_compile_control(Scope *s, CompData *out, Vector *tokens, size_t *pos, Ve
 		}
 	}
 
+	if (build > -1) {
+		// Generate pre-control statements
+		size_t start = build + 1;
+		int b_end = tnsl_find_closing(tokens, build);
+		for (build++ ;start <= build && build <= b_end; build++) {
+			if (build == start && tnsl_is_def(tokens, start)) {
+				p2_compile_def(&sub, out, tokens, &start, p_list);
+				build = start;
+			}
 
+			t = vect_get(tokens, build);
+			if (tok_str_eq(t, ";") || tok_str_eq(t, ")")) {
+				if (build != start) {
+					// Eval, check ending
+					Variable v = _eval(&sub, out, tokens, start, build);
+					if (strcmp(v->type->name, "bool") == 0 && tok_str_eq(t, ")")) {
+						build = start;
+					}
+				}
+				build = build + 1;
+				start = build;
+			} else if (t->type == TT_DELIMIT) {
+				build = tnsl_find_closing(tokens, build);
+			}
+		}
+	}
+
+	// Main loop statements
+	for(; *pos <= end; *pos = tnsl_next_non_nl(tokens, *pos)) {
+
+	}
+
+	if (rep > -1) {
+		// Generate post-control statements
+		size_t start = rep + 1;
+		int r_end = tnsl_find_closing(tokens, rep);
+		for (rep++ ;rep <= r_end; rep++) {
+			if (rep == start && tnsl_is_def(tokens, start)) {
+				p2_compile_def(&sub, out, tokens, &start, p_list);
+				rep = start;
+			}
+
+			t = vect_get(tokens, rep);
+			if (tok_str_eq(t, ";") || tok_str_eq(t, "]")) {
+				
+
+			}
+		}
+	}
+
+	// Scope cleanup
+	
 }
 
 // Handles the 'self' variable in the case where the function is in a method block.
