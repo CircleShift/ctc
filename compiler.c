@@ -5033,8 +5033,23 @@ void p2_compile_enum(Module *root, CompData *out, Vector *tokens, size_t *pos) {
 
 }
 
+void _p2_func_scope_end(CompData *out, Scope *fs) {
+	// No multi returns atm
+	
+	vect_push_string(&out->text, "\tlea rsp, [rbp - 56]\n");
+	vect_push_string(&out->text, "\tpop r15\n");
+	vect_push_string(&out->text, "\tpop r14\n");
+	vect_push_string(&out->text, "\tpop r13\n");
+	vect_push_string(&out->text, "\tpop r12\n");
+	vect_push_string(&out->text, "\tpop r11\n");
+	vect_push_string(&out->text, "\tpop r10\n");
+	vect_push_string(&out->text, "\tpop rbp\n"); // restore stack frame
+	vect_push_string(&out->text, "\tret ; Scope end\n");
+
+}
+
 // TODO loop blocks, if blocks, else blocks
-void p2_compile_control(Scope *s, CompData *out, Vector *tokens, size_t *pos, Vector *p_list) {
+void p2_compile_control(Scope *s, Function *f, CompData *out, Vector *tokens, size_t *pos, Vector *p_list) {
 	int end = tnsl_find_closing(tokens, *pos);
 	Token *t = vect_get(tokens, *pos);
 	
@@ -5095,7 +5110,7 @@ void p2_compile_control(Scope *s, CompData *out, Vector *tokens, size_t *pos, Ve
 				if (build != start) {
 					// Eval, check ending
 					Variable v = _eval(&sub, out, tokens, start, build);
-					if (strcmp(v->type->name, "bool") == 0 && tok_str_eq(t, ")")) {
+					if (strcmp(v.type->name, "bool") == 0 && tok_str_eq(t, ")")) {
 						build = start;
 					}
 				}
@@ -5109,7 +5124,69 @@ void p2_compile_control(Scope *s, CompData *out, Vector *tokens, size_t *pos, Ve
 
 	// Main loop statements
 	for(; *pos <= end; *pos = tnsl_next_non_nl(tokens, *pos)) {
+		t = vect_get(tokens, *pos);
+		if (tok_str_eq(t, "/;") || tok_str_eq(t, ";;")) {
+			size_t b_open = *pos;
+			
+			if(tnsl_block_type(tokens, *pos) == BT_CONTROL) {
+				p2_compile_control(&sub, f, out, tokens, pos, p_list);
+			} else {
+				printf("ERROR: Only control blocks (if, else, loop, switch) are valid inside functions (%d:%d)\n\n", t->line, t->col);
+				p2_error = true;
+			}
 
+			if (*pos == b_open) {
+				*pos = tnsl_find_closing(tokens, b_open);
+			} else if (tok_str_eq(t, ";;")) {
+				*pos -= 1;
+			}
+
+		} else if (t->type == TT_KEYWORD) {
+			if(tok_str_eq(t, "return")) {
+				t = vect_get(tokens, *pos + 1);
+				if (f->outputs.count > 0) {
+					if (*pos + 1 < end && !tok_str_eq(t, "\n")) {
+						*pos += 1;
+						Variable *out_type = vect_get(&f->outputs, 0);
+						Variable e = eval(&sub, out, tokens, pos, true, out_type);
+						var_end(&e);
+					} else {
+						t = vect_get(tokens, *pos);
+						printf("ERROR: Attempt to return from a function without a value, but the function requires one (%d:%d)", t->line, t->col);
+						p2_error = true;
+					}
+				}
+				_p2_func_scope_end(out, s);
+				*pos = end;
+			} else if (tok_str_eq(t, "asm")) {
+				t = vect_get(tokens, ++(*pos));
+				if(t->type != TT_LITERAL || t->data[0] != '"') {
+					printf("ERROR: Expected string literal after asm keyword (%d:%d)\n", t->line, t->col);
+					p2_error = true;
+				} else {
+					Vector asm_str = tnsl_unquote_str(t->data);
+					vect_push_string(&out->text, "\t");
+					vect_push_string(&out->text, vect_as_string(&asm_str));
+					vect_push_string(&out->text, "; User insert asm\n");
+					vect_end(&asm_str);
+				}
+			} else if (tok_str_eq(t, "continue") || tok_str_eq(t, "break")) {
+				printf("ERROR: This keyword will be implemented in a future commit \"%s\" (%d:%d)\n", t->data, t->line, t->col);
+				p2_error = true;
+			} else {
+				printf("ERROR: Keyword not implemented inside control blocks \"%s\" (%d:%d)\n", t->data, t->line, t->col);
+				p2_error = true;
+			}
+		} else if (tnsl_is_def(tokens, *pos)) {
+			p2_compile_def(&sub, out, tokens, pos, p_list);
+		} else if (*pos == end) {
+			break;
+		} else {
+			// TODO: figure out eval parameter needs (maybe needs start and end size_t?)
+			// and how eval will play into top level defs (if at all)
+			Variable e = eval(&sub, out, tokens, pos, false, NULL);
+			var_end(&e);
+		}
 	}
 
 	if (rep > -1) {
@@ -5198,20 +5275,6 @@ void _p2_func_scope_init(Module *root, CompData *out, Scope *fs, Function *f, Ve
 	}
 }
 
-void _p2_func_scope_end(CompData *out, Scope *fs) {
-	// No multi returns atm
-	
-	vect_push_string(&out->text, "\tlea rsp, [rbp - 56]\n");
-	vect_push_string(&out->text, "\tpop r15\n");
-	vect_push_string(&out->text, "\tpop r14\n");
-	vect_push_string(&out->text, "\tpop r13\n");
-	vect_push_string(&out->text, "\tpop r12\n");
-	vect_push_string(&out->text, "\tpop r11\n");
-	vect_push_string(&out->text, "\tpop r10\n");
-	vect_push_string(&out->text, "\tpop rbp\n"); // restore stack frame
-	vect_push_string(&out->text, "\tret ; Scope end\n");
-
-}
 
 void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *pos) {
 	int end = tnsl_find_closing(tokens, *pos);
@@ -5270,7 +5333,7 @@ void p2_compile_function(Module *root, CompData *out, Vector *tokens, size_t *po
 			size_t b_open = *pos;
 			
 			if(tnsl_block_type(tokens, *pos) == BT_CONTROL) {
-				p2_compile_control(&fs, out, tokens, pos, &p_list);
+				p2_compile_control(&fs, f, out, tokens, pos, &p_list);
 			} else {
 				printf("ERROR: Only control blocks (if, else, loop, switch) are valid inside functions (%d:%d)\n\n", t->line, t->col);
 				p2_error = true;
