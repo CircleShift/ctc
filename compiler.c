@@ -1526,11 +1526,172 @@ void var_op_xor(CompData *out, Variable *base, Variable *xor) {
 	xor_store = _var_get_store(out, base);
 	xor_from = _var_get_from(out, base, xor);
 
-	vect_push_string(&out->text, "\tadd ");
+	vect_push_string(&out->text, "\txor ");
 	vect_push_free_string(&out->text, xor_store);
 	vect_push_string(&out->text, ", ");
 	vect_push_free_string(&out->text, xor_from);
 	vect_push_string(&out->text, "; complete xor\n\n");
+}
+
+// nors "base" with "nor" and sets "base" to the result
+void var_op_nor(CompData *out, Variable *base, Variable *nor) {
+
+	if(base->location == LOC_LITL) {
+		if (nor->location == LOC_LITL)
+			base->offset |= ~nor->offset;
+		return;
+	}
+
+	char *nor_store;
+	char *nor_from;
+
+	nor_store = _var_get_store(out, base);
+	nor_from = _var_get_from(out, base, nor);
+
+	vect_push_string(&out->text, "\tor ");
+	vect_push_free_string(&out->text, nor_store);
+	vect_push_string(&out->text, ", ");
+	vect_push_free_string(&out->text, nor_from);
+	vect_push_string(&out->text, "\n\tnot ");
+	vect_push_free_string(&out->text, nor_store);
+	vect_push_string(&out->text, " ; Complete nor\n");
+}
+
+// nands "base" with "nand" and sets "base" to the result
+void var_op_nand(CompData *out, Variable *base, Variable *nand) {
+
+	if(base->location == LOC_LITL) {
+		if (nand->location == LOC_LITL) {
+			base->offset &= ~nand->offset;
+		}
+		return;
+	}
+
+	char *nand_store = _var_get_store(out, base);
+	char *nand_from = _var_get_from(out, base, nand);
+
+	vect_push_string(&out->text, "\tand ");
+	vect_push_free_string(&out->text, nand_store);
+	vect_push_string(&out->text, ", ");
+	vect_push_free_string(&out->text, nand_from);
+	vect_push_string(&out->text, "\n\tnot ");
+	vect_push_free_string(&out->text, nand_store);
+	vect_push_string(&out->text, " ; Complete nand\n");
+}
+
+// xands "base" with "xand" and sets "base" to the result
+void var_op_xand(CompData *out, Variable *base, Variable *xand) {
+
+	if(base->location == LOC_LITL) {
+		if (xand->location == LOC_LITL)
+			base->offset ^= ~xand->offset;
+		return;
+	}
+
+	char *xand_store = _var_get_store(out, base);
+	char *xand_from = _var_get_from(out, base, xand);
+
+	vect_push_string(&out->text, "\txor ");
+	vect_push_free_string(&out->text, xand_store);
+	vect_push_string(&out->text, ", ");
+	vect_push_free_string(&out->text, xand_from);
+	vect_push_string(&out->text, "\n\tnot ");
+	vect_push_free_string(&out->text, xand_store);
+	vect_push_string(&out->text, " ; Complete xand\n");
+}
+
+// bit inversion of base
+void var_op_not(CompData *out, Variable *base) {
+
+	if(base->location == LOC_LITL) {
+		base->offset = ~base->offset;
+		return;
+	}
+
+	char *not_store = _var_get_store(out, base);
+
+	vect_push_string(&out->text, "\tnot ");
+	vect_push_free_string(&out->text, not_store);
+	vect_push_string(&out->text, " ; Complete not\n");
+}
+
+// test base with itself
+void var_op_test(CompData *out, Variable *base) {
+
+	if(base->location == LOC_LITL) {
+		base->offset = !!base->offset;
+		return;
+	}
+
+	char *test_store = _var_get_store(out, base);
+	char *test_from = _var_get_from(out, base, base);
+
+	vect_push_string(&out->text, "\ttest ");
+	vect_push_free_string(&out->text, test_store);
+	vect_push_string(&out->text, ", ");
+	vect_push_free_string(&out->text, test_from);
+	vect_push_string(&out->text, " ; Complete not\n");
+}
+
+// bit shift base left by "bsl"
+void var_op_bsl(CompData *out, Variable *base, Variable *bsl) {
+
+	if(base->location == LOC_LITL) {
+		if (bsl->location == LOC_LITL)
+			base->offset = base->offset << bsl->offset;
+		return;
+	}
+
+	char *bsl_store = _var_get_store(out, base);
+
+	char *bsl_from;
+	if (bsl->location == LOC_LITL) {
+		bsl_from = int_to_str(bsl->offset % 128);
+	} else {
+		Variable cx = var_copy(bsl);
+		cx.offset = 0;
+		cx.mod = NULL;
+		cx.location = 3;
+		var_op_pure_set(out, &cx, bsl);
+		var_end(&cx);
+		bsl_from = _op_get_register(3, 1);
+	}
+
+	vect_push_string(&out->text, "\tshl ");
+	vect_push_free_string(&out->text, bsl_store);
+	vect_push_string(&out->text, ", ");
+	vect_push_free_string(&out->text, bsl_from);
+	vect_push_string(&out->text, " ; Complete shift left\n");
+}
+
+// bit shift base right by "bsr"
+void var_op_bsr(CompData *out, Variable *base, Variable *bsr) {
+
+	if(base->location == LOC_LITL) {
+		if (bsr->location == LOC_LITL)
+			base->offset = base->offset >> bsr->offset;
+		return;
+	}
+
+	char *bsr_store = _var_get_store(out, base);
+	char *bsr_from;
+	if (bsr->location == LOC_LITL) {
+		bsr_from = int_to_str(bsr->offset % 128);
+	} else {
+		Variable cx = var_copy(bsr);
+		cx.offset = 0;
+		cx.mod = NULL;
+		cx.location = 3;
+		var_op_pure_set(out, &cx, bsr);
+		var_end(&cx);
+		bsr_from = _op_get_register(3, 1);
+	}
+
+	vect_push_string(&out->text, "\tshr ");
+	vect_push_free_string(&out->text, bsr_store);
+	vect_push_string(&out->text, ", ");
+	vect_push_free_string(&out->text, bsr_from);
+	vect_push_string(&out->text, " ; Complete not\n");
 }
 
 // Multiplies "base" by "mul" and sets "base" to the result.
@@ -4521,6 +4682,12 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 			*ptype = PTYPE_PTR;
 			
 			return rhs;
+		} else if (op_token->data[0] == '!') {
+			out = scope_mk_tmp(s, data, &rhs);
+			var_end(&rhs);
+			
+			var_op_not(data, &out);
+			return out;
 		} else {
 			printf("ERROR: Unexpected prefix token\n");
 			return rhs;
@@ -4570,6 +4737,61 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 			break;
 		case '=':
 			var_op_set(data, &out, &rhs);
+			break;
+		case '<':
+			var_op_lt(data, &out, &rhs);
+			break;
+		case '>':
+			var_op_gt(data, &out, &rhs);
+			break;
+		}
+	} else if (strlen(op_token->data) == 2){
+		switch(op_token->data[0]) {
+		case '!':
+			if (op_token->data[1] == '&') {
+				var_op_nand(data, &out, &rhs);
+			} else if (op_token->data[1] == '|') {
+				var_op_nor(data, &out, &rhs);
+			} else if (op_token->data[1] == '^') {
+				var_op_xand(data, &out, &rhs);
+			} else if (op_token->data[1] == '>') {
+				var_op_let(data, &out, &rhs);
+			} else if (op_token->data[1] == '<') {
+				var_op_get(data, &out, &rhs);
+			}
+			break;
+		case '=':
+			var_op_eq(data, &out, &rhs);
+			break;
+		case '&':
+			var_op_band(data, &out, &rhs);
+			break;
+		case '|':
+			var_op_bor(data, &out, &rhs);
+			break;
+		case '<':
+			var_op_bsl(data, &out, &rhs);
+			break;
+		case '>':
+			var_op_bsr(data, &out, &rhs);
+			break;
+		}
+	} else if (strlen(op_token->data) == 3){
+		switch(op_token->data[0]) {
+		case '!':
+			if (op_token->data[1] == '=') {
+				var_op_neq(data, &out, &rhs);
+			} else if (op_token->data[1] == '&') {
+				// Not impl
+			} else if (op_token->data[1] == '|') {
+				// Not impl
+			}
+			break;
+		case '<':
+			var_op_let(data, &out, &rhs);
+			break;
+		case '>':
+			var_op_get(data, &out, &rhs);
 			break;
 		}
 	}
@@ -5268,7 +5490,13 @@ void p2_compile_control(Scope *s, Function *f, CompData *out, Vector *tokens, si
 	vect_push_string(&out->text, ": ; End label\n");
 
 	// Scope cleanup
-	
+	scope_end(&sub);
+
+	if (wrap.name != NULL) {
+		vect_push_free_string(&out->text, scope_label_end(&wrap));
+		vect_push_string(&out->text, ": ; End wrap label\n");
+		scope_end(&wrap);
+	}
 }
 
 // Handles the 'self' variable in the case where the function is in a method block.
