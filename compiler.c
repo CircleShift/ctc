@@ -3629,6 +3629,7 @@ char *scope_gen_const_label(Scope *s) {
 // Sub scopes
 Scope scope_subscope(Scope *s, char *name) {
 	Vector n = vect_from_string(name);
+	vect_push_string(&n, "#");
 	vect_push_free_string(&n, int_to_str(s->next_const));
 	s->next_const++;
 
@@ -3638,6 +3639,14 @@ Scope scope_subscope(Scope *s, char *name) {
 	vect_end(&n);
 
 	return out;
+}
+
+bool scope_name_eq(Scope *s, char *name) {
+	char *pound = strchr(s->name, '#');
+	*pound = 0;
+	bool test = strcmp(s->name, name) == 0;
+	*pound = '#';
+	return test;
 }
 
 // Scope variable creation and management
@@ -5097,9 +5106,11 @@ void p2_compile_control(Scope *s, Function *f, CompData *out, Vector *tokens, si
 
 	if (build > -1) {
 		// Generate pre-control statements
-		size_t start = build + 1;
+		size_t start = tnsl_next_non_nl(tokens, build);
 		int b_end = tnsl_find_closing(tokens, build);
-		for (build++ ;start <= build && build <= b_end; build++) {
+		build = start;
+
+		for (;start <= build && build <= b_end; build = tnsl_next_non_nl(tokens, build)) {
 			if (build == start && tnsl_is_def(tokens, start)) {
 				p2_compile_def(&sub, out, tokens, &start, p_list);
 				build = start;
@@ -5111,16 +5122,31 @@ void p2_compile_control(Scope *s, Function *f, CompData *out, Vector *tokens, si
 					// Eval, check ending
 					Variable v = _eval(&sub, out, tokens, start, build);
 					if (strcmp(v.type->name, "bool") == 0 && tok_str_eq(t, ")")) {
-						build = start;
+						build = start - 1;
+						start = b_end;
+						var_op_test(out, &v);
+						vect_push_string(&out->data, "\tjz ");
+						vect_push_free_string(&out->data, scope_label_end(&sub));
+						vect_push_string(&out->data, "; Conditional start\n");
+					} else {
+						start = build + 1;
 					}
+					var_end(&v);
+				} else {
+					start = build + 1;
 				}
-				build = build + 1;
-				start = build;
 			} else if (t->type == TT_DELIMIT) {
 				build = tnsl_find_closing(tokens, build);
 			}
 		}
+
+		if (build > b_end) {
+			build = -1;
+		}
 	}
+
+	vect_push_free_string(&out->text, scope_label_start(&sub));
+	vect_push_string(&out->text, ": ; Start label\n");
 
 	// Main loop statements
 	for(; *pos <= end; *pos = tnsl_next_non_nl(tokens, *pos)) {
@@ -5133,6 +5159,7 @@ void p2_compile_control(Scope *s, Function *f, CompData *out, Vector *tokens, si
 			} else {
 				printf("ERROR: Only control blocks (if, else, loop, switch) are valid inside functions (%d:%d)\n\n", t->line, t->col);
 				p2_error = true;
+				*pos = end - 1;
 			}
 
 			if (*pos == b_open) {
@@ -5189,11 +5216,16 @@ void p2_compile_control(Scope *s, Function *f, CompData *out, Vector *tokens, si
 		}
 	}
 
+	vect_push_free_string(&out->text, scope_label_rep(&sub));
+	vect_push_string(&out->text, ": ; Rep label\n");
+
 	if (rep > -1) {
 		// Generate post-control statements
-		size_t start = rep + 1;
+		size_t start = tnsl_next_non_nl(tokens, rep);
 		int r_end = tnsl_find_closing(tokens, rep);
-		for (rep++ ;rep <= r_end; rep++) {
+		rep = start;
+
+		for (;start <= rep && rep <= r_end; rep = tnsl_next_non_nl(tokens, rep)) {
 			if (rep == start && tnsl_is_def(tokens, start)) {
 				p2_compile_def(&sub, out, tokens, &start, p_list);
 				rep = start;
@@ -5201,11 +5233,39 @@ void p2_compile_control(Scope *s, Function *f, CompData *out, Vector *tokens, si
 
 			t = vect_get(tokens, rep);
 			if (tok_str_eq(t, ";") || tok_str_eq(t, "]")) {
-				
-
+				if (rep != start) {
+					// Eval, check ending
+					Variable v = _eval(&sub, out, tokens, start, rep);
+					if (strcmp(v.type->name, "bool") == 0 && tok_str_eq(t, "]") && strcmp(sub.name, "loop") == 0) {
+						rep = start - 1;
+						start = r_end;
+						var_op_test(out, &v);
+						vect_push_string(&out->text, "\tjnz ");
+						vect_push_free_string(&out->text, scope_label_start(&sub));
+						vect_push_string(&out->text, "; Conditional rep\n");
+					} else {
+						start = build + 1;
+					}
+					var_end(&v);
+				} else {
+					start = build + 1;
+				}
+			} else if (t->type == TT_DELIMIT) {
+				build = tnsl_find_closing(tokens, build);
 			}
 		}
+
+		if (build > r_end) {
+			build = -1;
+		}
 	}
+
+	if (scope_name_eq(&sub, "loop")) {
+	}
+
+
+	vect_push_free_string(&out->text, scope_label_end(&sub));
+	vect_push_string(&out->text, ": ; End label\n");
 
 	// Scope cleanup
 	
