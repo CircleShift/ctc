@@ -413,6 +413,14 @@ typedef struct {
 	Module *module;
 } Function;
 
+typedef struct Scope {
+	char *name;
+	Module *current;
+	Vector stack_vars, reg_vars;
+	struct Scope *parent;
+	int next_const;
+	int next_bool;
+} Scope;
 
 
 // Copies the name, does not copy the module.
@@ -483,6 +491,100 @@ bool is_inbuilt(char *name) {
 }
 
 
+// SCOPE FUNCTIONS
+
+Scope scope_init(char *name, Module *mod) {
+	Scope out = {0};
+
+	Vector cpy = vect_from_string(name);
+	out.name = vect_as_string(&cpy);
+
+	out.stack_vars = vect_init(sizeof(Variable));
+	out.reg_vars = vect_init(sizeof(Variable));
+	out.current = mod;
+
+	out.next_const = 0;
+	out.next_bool = 0;
+
+	return out;
+}
+
+void scope_end(Scope *s) {
+	free(s->name);
+	
+	for(size_t i = 0; i < s->stack_vars.count; i++) {
+		Variable *v = vect_get(&s->stack_vars, i);
+		var_end(v);
+	}
+	vect_end(&s->stack_vars);
+
+	for(size_t i = 0; i < s->reg_vars.count; i++) {
+		Variable *v = vect_get(&s->reg_vars, i);
+		var_end(v);
+	}
+	vect_end(&s->reg_vars);
+}
+
+// Label generation
+void _scope_name_rec(Scope *s, Vector *v) {
+	// Base case
+	if (s == NULL)
+		return;
+
+	_scope_name_rec(s->parent, v);
+	
+	// Add # before name if not directly from module
+	if (s->parent != NULL)
+		vect_push_string(v, "#");
+	vect_push_string(v, s->name);
+}
+
+char *mod_label_prefix(Module *m);
+Vector _scope_base_label(Scope *s) {
+	Vector out = vect_from_string("");
+	vect_push_free_string(&out, mod_label_prefix(s->current));
+
+	_scope_name_rec(s, &out);
+
+	return out;
+}
+
+char *scope_label_start(Scope *s) {
+	Vector out = _scope_base_label(s);
+	vect_push_string(&out, "#start");
+	return vect_as_string(&out);
+}
+
+char *scope_label_rep(Scope *s) {
+	Vector out = _scope_base_label(s);
+	vect_push_string(&out, "#rep");
+	return vect_as_string(&out);
+}
+
+char *scope_label_end(Scope *s) {
+	Vector out = _scope_base_label(s);
+	vect_push_string(&out, "#end");
+	return vect_as_string(&out);
+}
+
+char *scope_gen_const_label(Scope *s) {
+	Vector out = _scope_base_label(s);
+	vect_push_string(&out, "#const");
+	vect_push_free_string(&out, int_to_str(s->next_const));
+	s->next_const++;
+	return vect_as_string(&out);
+}
+
+char *scope_gen_bool_label(Scope *s) {
+	Vector out = _scope_base_label(s);
+	vect_push_string(&out, "#bool");
+	vect_push_free_string(&out, int_to_str(s->next_bool));
+	return vect_as_string(&out);
+}
+
+void scope_adv_bool_label(Scope *s) {
+	s->next_bool++;
+}
 
 // Variables
 
@@ -1107,6 +1209,11 @@ char *_var_get_store(CompData *out, Variable *store) {
 		char *name = _var_get_datalabel(store);
 		return _gen_address(PREFIXES[_var_size(store) - 1], name, "", 0, 0, true);
 		free(name);
+	} else if (store->location == LOC_LITL) {
+		vect_push_string(&out->text, "\tmov rdi, ");
+		vect_push_free_string(&out->text, int_to_str(store->offset));
+		vect_push_string(&out->text, "; litl set\n");
+		return _op_get_register(6, _var_size(store));
 	} else if (store->location < 0) {
 		return _gen_address(PREFIXES[_var_size(store) - 1], "rbp", "", 0, store->offset, false);
 	} else {
@@ -1141,7 +1248,7 @@ char *_var_get_from(CompData *out, Variable *store, Variable *from) {
 	} else if (from->location > 0) {
 		mov_from = _op_get_register(from->location, _var_size(from));
 	} else if (from->location == LOC_LITL) {
-		if (store->location < 1 || _var_ptr_type(store) == PTYPE_REF) {
+		if ((store->location == LOC_DATA || store->location == LOC_STCK) || _var_ptr_type(store) == PTYPE_REF) {
 			vect_push_string(&out->text, "\tmov ");
 			vect_push_free_string(&out->text, _op_get_register(5, _var_size(store)));
 			vect_push_string(&out->text, ", ");
@@ -1692,6 +1799,66 @@ void var_op_bsr(CompData *out, Variable *base, Variable *bsr) {
 	vect_push_string(&out->text, ", ");
 	vect_push_free_string(&out->text, bsr_from);
 	vect_push_string(&out->text, " ; Complete not\n");
+}
+
+void _var_op_cmpbase(CompData *out, Variable *base, Variable *cmp, char *cc) {
+
+	char *store = _var_get_store(out, base);
+	char *from = _var_get_from(out, base, cmp);
+
+	vect_push_string(&out->text, "\txor rax, rax\n");
+	vect_push_string(&out->text, "\tmov rdx, 1\n");
+
+	// cmp
+	vect_push_string(&out->text, "\tcmp ");
+	vect_push_free_string(&out->text, from);
+	vect_push_string(&out->text, ", ");
+	vect_push_free_string(&out->text, from);
+
+	vect_push_string(&out->text, "\tcmov");
+	vect_push_string(&out->text, cc);
+	vect_push_string(&out->text, " rax, rdx ; bool gen\n");
+	vect_push_string(&out->text, "\ttest rax, rax ; less than test\n");
+
+}
+
+// Less than
+void var_op_lt(CompData *out, Variable *base, Variable *lt) {
+	_var_op_cmpbase(out, base, lt, "lt");
+}
+
+// Greater than
+void var_op_gt(CompData *out, Variable *base, Variable *lt) {
+	_var_op_cmpbase(out, base, lt, "gt");
+}
+
+// Less or equal
+void var_op_let(CompData *out, Variable *base, Variable *lt) {
+	_var_op_cmpbase(out, base, lt, "le");
+}
+
+// Greater or equal
+void var_op_get(CompData *out, Variable *base, Variable *lt) {
+	_var_op_cmpbase(out, base, lt, "ge");
+}
+
+// Boolean and
+void var_op_band(CompData *out, Scope *s) {
+	// Just parsed the left side, short circuit if zero
+	
+}
+
+// Generate a bool
+Variable var_gen_bool(CompData *out) {
+	// load bool value into rax
+	vect_push_string(&out->text, "\txor rax, rax\n");
+	vect_push_string(&out->text, "\tmov rdx, 1\n");
+	vect_push_string(&out->text, "\tcmovnz rax, rdx ; bool gen\n");
+
+	// Generate variable
+	Variable v = var_init("#bool", typ_get_inbuilt("bool"));
+	v.location = 1;
+	return v;
 }
 
 // Multiplies "base" by "mul" and sets "base" to the result.
@@ -3698,94 +3865,6 @@ void phase_1(Artifact *path, Module *root) {
 
 // Phase 2
 
-typedef struct Scope {
-	char *name;
-	Module *current;
-	Vector stack_vars, reg_vars;
-	struct Scope *parent;
-	int next_const;
-} Scope;
-
-Scope scope_init(char *name, Module *mod) {
-	Scope out = {0};
-
-	Vector cpy = vect_from_string(name);
-	out.name = vect_as_string(&cpy);
-
-	out.stack_vars = vect_init(sizeof(Variable));
-	out.reg_vars = vect_init(sizeof(Variable));
-	out.current = mod;
-
-	out.next_const = 0;
-
-	return out;
-}
-
-void scope_end(Scope *s) {
-	free(s->name);
-	
-	for(size_t i = 0; i < s->stack_vars.count; i++) {
-		Variable *v = vect_get(&s->stack_vars, i);
-		var_end(v);
-	}
-	vect_end(&s->stack_vars);
-
-	for(size_t i = 0; i < s->reg_vars.count; i++) {
-		Variable *v = vect_get(&s->reg_vars, i);
-		var_end(v);
-	}
-	vect_end(&s->reg_vars);
-}
-
-// Label generation
-void _scope_name_rec(Scope *s, Vector *v) {
-	// Base case
-	if (s == NULL)
-		return;
-
-	_scope_name_rec(s->parent, v);
-	
-	// Add # before name if not directly from module
-	if (s->parent != NULL)
-		vect_push_string(v, "#");
-	vect_push_string(v, s->name);
-}
-
-Vector _scope_base_label(Scope *s) {
-	Vector out = vect_from_string("");
-	vect_push_free_string(&out, mod_label_prefix(s->current));
-
-	_scope_name_rec(s, &out);
-
-	return out;
-}
-
-char *scope_label_start(Scope *s) {
-	Vector out = _scope_base_label(s);
-	vect_push_string(&out, "#start");
-	return vect_as_string(&out);
-}
-
-char *scope_label_rep(Scope *s) {
-	Vector out = _scope_base_label(s);
-	vect_push_string(&out, "#rep");
-	return vect_as_string(&out);
-}
-
-char *scope_label_end(Scope *s) {
-	Vector out = _scope_base_label(s);
-	vect_push_string(&out, "#end");
-	return vect_as_string(&out);
-}
-
-char *scope_gen_const_label(Scope *s) {
-	Vector out = _scope_base_label(s);
-	vect_push_string(&out, "#const");
-	vect_push_free_string(&out, int_to_str(s->next_const));
-	s->next_const++;
-	return vect_as_string(&out);
-}
-
 
 // Sub scopes
 Scope scope_subscope(Scope *s, char *name) {
@@ -4761,13 +4840,13 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 			}
 			break;
 		case '=':
-			var_op_eq(data, &out, &rhs);
+			var_op_eq(data, s, &out, &rhs);
 			break;
 		case '&':
-			var_op_band(data, &out, &rhs);
+			var_op_band(data, s);
 			break;
 		case '|':
-			var_op_bor(data, &out, &rhs);
+			var_op_bor(data, s, &out, &rhs);
 			break;
 		case '<':
 			var_op_bsl(data, &out, &rhs);
