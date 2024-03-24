@@ -1213,7 +1213,9 @@ char *_var_get_store(CompData *out, Variable *store) {
 		vect_push_string(&out->text, "\tmov rdi, ");
 		vect_push_free_string(&out->text, int_to_str(store->offset));
 		vect_push_string(&out->text, "; litl set\n");
-		return _op_get_register(6, _var_size(store));
+		if (store->type != NULL)
+			return _op_get_register(6, _var_size(store));
+		return _op_get_register(6, 8); 
 	} else if (store->location < 0) {
 		return _gen_address(PREFIXES[_var_size(store) - 1], "rbp", "", 0, store->offset, false);
 	} else {
@@ -1248,7 +1250,14 @@ char *_var_get_from(CompData *out, Variable *store, Variable *from) {
 	} else if (from->location > 0) {
 		mov_from = _op_get_register(from->location, _var_size(from));
 	} else if (from->location == LOC_LITL) {
-		if ((store->location == LOC_DATA || store->location == LOC_STCK) || _var_ptr_type(store) == PTYPE_REF) {
+		if (store->location == LOC_LITL) {
+			vect_push_string(&out->text, "\tmov rsi, ");
+			vect_push_free_string(&out->text, int_to_str(store->offset));
+			vect_push_string(&out->text, "; litl set\n");
+			if (store->type != NULL)
+				return _op_get_register(5, _var_size(store));
+			return _op_get_register(5, 8); 
+		} else if (store->location < 1 || _var_ptr_type(store) == PTYPE_REF) {
 			vect_push_string(&out->text, "\tmov ");
 			vect_push_free_string(&out->text, _op_get_register(5, _var_size(store)));
 			vect_push_string(&out->text, ", ");
@@ -1766,7 +1775,8 @@ void var_op_bsl(CompData *out, Variable *base, Variable *bsl) {
 		var_end(&cx);
 		bsl_from = _op_get_register(3, 1);
 	}
-
+	
+	// Signed and unsigned shift are the same
 	vect_push_string(&out->text, "\tshl ");
 	vect_push_free_string(&out->text, bsl_store);
 	vect_push_string(&out->text, ", ");
@@ -1786,7 +1796,7 @@ void var_op_bsr(CompData *out, Variable *base, Variable *bsr) {
 	char *bsr_store = _var_get_store(out, base);
 	char *bsr_from;
 	if (bsr->location == LOC_LITL) {
-		bsr_from = int_to_str(bsr->offset % 128);
+		bsr_from = int_to_str(bsr->offset % 256);
 	} else {
 		Variable cx = var_copy(bsr);
 		cx.offset = 0;
@@ -1796,63 +1806,115 @@ void var_op_bsr(CompData *out, Variable *base, Variable *bsr) {
 		var_end(&cx);
 		bsr_from = _op_get_register(3, 1);
 	}
-
-	vect_push_string(&out->text, "\tshr ");
+	
+	if (is_inbuilt(base->type->name) && base->type->name[0] == 'i') {
+		// integer shift
+		vect_push_string(&out->text, "\tsar ");
+	} else {
+		// unsigned shift
+		vect_push_string(&out->text, "\tshr ");
+	}
 	vect_push_free_string(&out->text, bsr_store);
 	vect_push_string(&out->text, ", ");
 	vect_push_free_string(&out->text, bsr_from);
 	vect_push_string(&out->text, " ; Complete not\n");
 }
 
-void _var_op_cmpbase(CompData *out, Variable *base, Variable *cmp, char *cc) {
+Variable var_op_cmpbase(CompData *out, Variable *base, Variable *cmp, char *cc) {
 
 	char *store = _var_get_store(out, base);
-	char *from = _var_get_from(out, base, cmp);
 
-	vect_push_string(&out->text, "\txor rax, rax\n");
-	vect_push_string(&out->text, "\tmov rdx, 1\n");
+	int tmp_loc = base->location;
+	if (cmp->location == LOC_LITL) {
+		base->location = LOC_LITL;
+	}
+	
+	char *from = _var_get_from(out, base, cmp);
+	
+	if (cmp->location == LOC_LITL) {
+		base->location = tmp_loc;
+	}
 
 	// cmp
 	vect_push_string(&out->text, "\tcmp ");
 	vect_push_free_string(&out->text, from);
 	vect_push_string(&out->text, ", ");
 	vect_push_free_string(&out->text, from);
-
+	
+	// prime rax and rdx
+	vect_push_string(&out->text, "\tmov rax, 0\n");
+	vect_push_string(&out->text, "\tmov rdx, 1\n");
+	
+	// Store bool value in rax and test so jumps make sense
 	vect_push_string(&out->text, "\tcmov");
 	vect_push_string(&out->text, cc);
 	vect_push_string(&out->text, " rax, rdx ; bool gen\n");
 	vect_push_string(&out->text, "\ttest rax, rax ; less than test\n");
 
+	// Generate variable
+	Variable v = var_init("#bool", typ_get_inbuilt("bool"));
+	v.location = 1;
+	return v;
 }
 
-// Less than
-void var_op_lt(CompData *out, Variable *base, Variable *lt) {
-	_var_op_cmpbase(out, base, lt, "lt");
+void var_op_le(CompData *out, Variable *base, Variable *cmp) {
+	Variable tmp;
+	if (base->location == LOC_LITL || (is_inbuilt(base->type->name) && base->type->name[0] == 'i')) {
+		// int compare
+		tmp = var_op_cmpbase(out, base, cmp, "le");
+	} else {
+		tmp = var_op_cmpbase(out, base, cmp, "be");
+	}
+	var_end(base);
+	*base = tmp;
 }
 
-// Greater than
-void var_op_gt(CompData *out, Variable *base, Variable *lt) {
-	_var_op_cmpbase(out, base, lt, "gt");
+void var_op_ge(CompData *out, Variable *base, Variable *cmp) {
+	Variable tmp;
+	if (base->location == LOC_LITL || (is_inbuilt(base->type->name) && base->type->name[0] == 'i')) {
+		// int compare
+		tmp = var_op_cmpbase(out, base, cmp, "ge");
+	} else {
+		tmp = var_op_cmpbase(out, base, cmp, "ae");
+	}
+	var_end(base);
+	*base = tmp;
 }
 
-// Less or equal
-void var_op_let(CompData *out, Variable *base, Variable *lt) {
-	_var_op_cmpbase(out, base, lt, "le");
+void var_op_lt(CompData *out, Variable *base, Variable *cmp) {
+	Variable tmp;
+	if (base->location == LOC_LITL || (is_inbuilt(base->type->name) && base->type->name[0] == 'i')) {
+		// int compare
+		tmp = var_op_cmpbase(out, base, cmp, "l");
+	} else {
+		tmp = var_op_cmpbase(out, base, cmp, "b");
+	}
+	var_end(base);
+	*base = tmp;
 }
 
-// Greater or equal
-void var_op_get(CompData *out, Variable *base, Variable *lt) {
-	_var_op_cmpbase(out, base, lt, "ge");
+void var_op_gt(CompData *out, Variable *base, Variable *cmp) {
+	Variable tmp;
+	if (base->location == LOC_LITL || (is_inbuilt(base->type->name) && base->type->name[0] == 'i')) {
+		// int compare
+		tmp = var_op_cmpbase(out, base, cmp, "g");
+	} else {
+		tmp = var_op_cmpbase(out, base, cmp, "a");
+	}
+	var_end(base);
+	*base = tmp;
 }
 
-// equal
-void var_op_beq(CompData *out, Variable *base, Variable *eq) {
-	_var_op_cmpbase(out, base, eq, "eq");
+void var_op_eq(CompData *out, Variable *base, Variable *cmp) {
+	Variable tmp = var_op_cmpbase(out, base, cmp, "e");
+	var_end(base);
+	*base = tmp;
 }
 
-// equal
-void var_op_bne(CompData *out, Variable *base, Variable *ne) {
-	_var_op_cmpbase(out, base, ne, "ne");
+void var_op_ne(CompData *out, Variable *base, Variable *cmp) {
+	Variable tmp = var_op_cmpbase(out, base, cmp, "ne");
+	var_end(base);
+	*base = tmp;
 }
 
 // Boolean and
@@ -1866,26 +1928,13 @@ void var_op_band(CompData *out, Scope *s) {
 // Boolean or
 void var_op_bor(CompData *out, Scope *s) {
 	// Just parsed the left side, short circuit if zero
-	vect_push_string(&out->text, "\tjz ");
+	vect_push_string(&out->text, "\tjnz ");
 	vect_push_free_string(&out->text, scope_gen_bool_label(s));
 	vect_push_string(&out->text, "true ; bool or\n\n");
 }
 
 void var_op_bxor(CompData *out, Variable *lhs, Variable *rhs) {
 	// Nothing for now
-}
-
-// Generate a bool
-Variable var_gen_bool(CompData *out) {
-	// load bool value into rax
-	vect_push_string(&out->text, "\txor rax, rax\n");
-	vect_push_string(&out->text, "\tmov rdx, 1\n");
-	vect_push_string(&out->text, "\tcmovnz rax, rdx ; bool gen\n");
-
-	// Generate variable
-	Variable v = var_init("#bool", typ_get_inbuilt("bool"));
-	v.location = 1;
-	return v;
 }
 
 // Multiplies "base" by "mul" and sets "base" to the result.
@@ -4784,7 +4833,9 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 	
 	// if boolean, eval left to right, not right to left
 	if (op == 9) {
-
+		printf("ERROR: TO IMPL BOOL\n");
+		p2_error = true;
+		return out;
 	}
 	
 	Variable rhs = _eval(s, data, tokens, op_pos + 1, end);
@@ -4813,6 +4864,12 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 		}
 	}
 
+	if (op != 10 && !scope_is_tmp(&rhs) && rhs.location != LOC_LITL) {
+		Variable tmp = scope_mk_tmp(s, data, &rhs);
+		var_end(&rhs);
+		rhs = tmp;
+	}
+
 	out = _eval(s, data, tokens, start, op_pos);
 	if (out.location == LOC_LITL) {
 		if (rhs.location != LOC_LITL) {
@@ -4822,12 +4879,6 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 		}
 	}
 	
-	if (op != 10 && !scope_is_tmp(&out) && out.location != LOC_LITL) {
-		Variable tmp = scope_mk_tmp(s, data, &out);
-		var_end(&out);
-		out = tmp;
-	}
-
 	if (strlen(op_token->data) == 1) {
 		switch(op_token->data[0]) {
 		case '+':
@@ -4873,20 +4924,14 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 				var_op_nor(data, &out, &rhs);
 			} else if (op_token->data[1] == '^') {
 				var_op_xand(data, &out, &rhs);
-			} else if (op_token->data[1] == '>') {
-				var_op_let(data, &out, &rhs);
 			} else if (op_token->data[1] == '<') {
-				var_op_get(data, &out, &rhs);
+				var_op_ge(data, &out, &rhs);
+			} else if (op_token->data[1] == '>') {
+				var_op_le(data, &out, &rhs);
 			}
 			break;
 		case '=':
-			var_op_beq(data, &out, &rhs);
-			break;
-		case '&':
-			var_op_band(data, s);
-			break;
-		case '|':
-			var_op_bor(data, s);
+			var_op_eq(data, &out, &rhs);
 			break;
 		case '<':
 			var_op_bsl(data, &out, &rhs);
@@ -4899,18 +4944,14 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 		switch(op_token->data[0]) {
 		case '!':
 			if (op_token->data[1] == '=') {
-				var_op_bne(data, &out, &rhs);
-			} else if (op_token->data[1] == '&') {
-				// Not impl
-			} else if (op_token->data[1] == '|') {
-				// Not impl
+				var_op_ne(data, &out, &rhs);
 			}
 			break;
 		case '<':
-			var_op_let(data, &out, &rhs);
+			var_op_le(data, &out, &rhs);
 			break;
 		case '>':
-			var_op_get(data, &out, &rhs);
+			var_op_ge(data, &out, &rhs);
 			break;
 		}
 	}
