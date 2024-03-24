@@ -1837,7 +1837,7 @@ Variable var_op_cmpbase(CompData *out, Variable *base, Variable *cmp, char *cc) 
 
 	// cmp
 	vect_push_string(&out->text, "\tcmp ");
-	vect_push_free_string(&out->text, from);
+	vect_push_free_string(&out->text, store);
 	vect_push_string(&out->text, ", ");
 	vect_push_free_string(&out->text, from);
 	
@@ -4034,6 +4034,11 @@ int _scope_avail_reg(Scope *s) {
 // PERSISTANT VARIABLES TO PREVENT STACK CLUTTER!!!!!!
 Variable scope_mk_tmp(Scope *s, CompData *data, Variable *v) {
 	Variable out = var_copy(v);
+
+	while (_var_ptr_type(&out) == PTYPE_REF) {
+		vect_pop(&out.ptr_chain);
+	}
+
 	int p_typ = _var_ptr_type(v);
 
 	free(out.name);
@@ -4480,7 +4485,10 @@ Variable _eval_call(Scope *s, CompData *data, Vector *tokens, Function *f, Varia
 			Variable set = scope_mk_stmp(s, data, cur);
 			Variable from = _eval(s, data, tokens, pstart, pend);
 			// eval and set
-			var_op_set(data, &set, &from);
+			if (_var_ptr_type(&set) == PTYPE_REF)
+				var_op_pure_set(data, &set, &from);
+			else
+				var_op_set(data, &set, &from);
 			scope_free_to(s, data, &set);
 			var_end(&from);
 			var_end(&set);
@@ -4532,7 +4540,10 @@ Variable _eval_call(Scope *s, CompData *data, Vector *tokens, Function *f, Varia
 			Variable set = scope_mk_stmp(s, data, cur);
 			// eval and set
 			Variable from = _eval(s, data, tokens, pstart, pend);
-			var_op_set(data, &set, &from);
+			if (_var_ptr_type(&set) == PTYPE_REF)
+				var_op_pure_set(data, &set, &from);
+			else
+				var_op_set(data, &set, &from);
 			// cleanup
 			scope_free_to(s, data, &set);
 			var_end(&from);
@@ -4763,7 +4774,7 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 		}
 	}
 
-	// Found first delim and lowest priority op
+	// Found first delim and last lowest priority op
 	Variable out;
 	out.name = NULL;
 	out.location = LOC_LITL;
@@ -4838,18 +4849,19 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 		return out;
 	}
 	
-	Variable rhs = _eval(s, data, tokens, op_pos + 1, end);
-
 	if (op_pos == start) {
+		Variable rhs = _eval(s, data, tokens, op_pos + 1, end);
 		if (op_token->data[0] == '~') {
 			Variable store;
 			var_op_reference(data, &store, &rhs);
 			var_end(&rhs);
+			
+			int *ptype = vect_get(&store.ptr_chain, store.ptr_chain.count - 1);
+			*ptype = PTYPE_PTR;
+			
 			rhs = scope_mk_tmp(s, data, &store);
 			var_end(&store);
 			
-			int *ptype = vect_get(&rhs.ptr_chain, rhs.ptr_chain.count - 1);
-			*ptype = PTYPE_PTR;
 			
 			return rhs;
 		} else if (op_token->data[0] == '!') {
@@ -4863,14 +4875,23 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 			return rhs;
 		}
 	}
+	
+	Variable rhs = _eval(s, data, tokens, op_pos + 1, end);
 
-	if (op != 10 && !scope_is_tmp(&rhs) && rhs.location != LOC_LITL) {
+	if (!scope_is_tmp(&rhs) && rhs.location > 1 && rhs.location < 9) {
 		Variable tmp = scope_mk_tmp(s, data, &rhs);
 		var_end(&rhs);
 		rhs = tmp;
 	}
 
 	out = _eval(s, data, tokens, start, op_pos);
+	
+	if (op != 10 && !scope_is_tmp(&out) && out.location != LOC_LITL) {
+		Variable tmp = scope_mk_tmp(s, data, &out);
+		var_end(&out);
+		out = tmp;
+	}
+	
 	if (out.location == LOC_LITL) {
 		if (rhs.location != LOC_LITL) {
 			Variable tmp = rhs;
@@ -4878,6 +4899,7 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 			rhs = tmp;
 		}
 	}
+	
 	
 	if (strlen(op_token->data) == 1) {
 		switch(op_token->data[0]) {
