@@ -1726,7 +1726,10 @@ void var_op_not(CompData *out, Variable *base) {
 void var_op_test(CompData *out, Variable *base) {
 
 	if(base->location == LOC_LITL) {
-		base->offset = !!base->offset;
+		vect_push_string(&out->text, "\tmov rax, ");
+		vect_push_free_string(&out->text, int_to_str(base->offset));
+		vect_push_string(&out->text, "\n");
+		vect_push_string(&out->text, "\ttest rax, rax ; lit test\n\n");
 		return;
 	}
 
@@ -1842,10 +1845,34 @@ void var_op_get(CompData *out, Variable *base, Variable *lt) {
 	_var_op_cmpbase(out, base, lt, "ge");
 }
 
+// equal
+void var_op_beq(CompData *out, Variable *base, Variable *eq) {
+	_var_op_cmpbase(out, base, eq, "eq");
+}
+
+// equal
+void var_op_bne(CompData *out, Variable *base, Variable *ne) {
+	_var_op_cmpbase(out, base, ne, "ne");
+}
+
 // Boolean and
 void var_op_band(CompData *out, Scope *s) {
 	// Just parsed the left side, short circuit if zero
-	
+	vect_push_string(&out->text, "\tjz ");
+	vect_push_free_string(&out->text, scope_gen_bool_label(s));
+	vect_push_string(&out->text, "false ; bool and\n\n");
+}
+
+// Boolean or
+void var_op_bor(CompData *out, Scope *s) {
+	// Just parsed the left side, short circuit if zero
+	vect_push_string(&out->text, "\tjz ");
+	vect_push_free_string(&out->text, scope_gen_bool_label(s));
+	vect_push_string(&out->text, "true ; bool or\n\n");
+}
+
+void var_op_bxor(CompData *out, Variable *lhs, Variable *rhs) {
+	// Nothing for now
 }
 
 // Generate a bool
@@ -1867,6 +1894,10 @@ void var_op_mul(CompData *out, Variable *base, Variable *mul) {
 		if (mul->location == LOC_LITL)
 			base->offset *= mul->offset;
 		return;
+	}
+
+	if (mul->location == 1) {
+		var_chg_register(out, mul, 3);
 	}
 
 	if(base->type->name[0] == 'i') {
@@ -1893,11 +1924,13 @@ void var_op_mul(CompData *out, Variable *base, Variable *mul) {
 			vect_push_free_string(&out->text, _op_get_register(3, _var_size(base)));
 			vect_push_string(&out->text, "; complete mul\n\n");
 		} else {
+			char *store = _var_get_store(out, base);
+
 			// Mov to rax for the multiplication, move back after.
 			vect_push_string(&out->text, "\tmov ");
 			vect_push_free_string(&out->text, _op_get_register(1, _var_size(base)));
 			vect_push_string(&out->text, ", ");
-			vect_push_free_string(&out->text, _var_get_store(out, base));
+			vect_push_string(&out->text, store);
 			vect_push_string(&out->text, "; pre-mul mov\n");
 
 			if (mul->location == LOC_LITL) {
@@ -1909,23 +1942,25 @@ void var_op_mul(CompData *out, Variable *base, Variable *mul) {
 				vect_push_free_string(&out->text, _op_get_register(3, _var_size(base)));
 				vect_push_string(&out->text, "; mul\n");
 			} else {
+				char *from = _var_get_from(out, base, mul);
 				vect_push_string(&out->text, "\timul ");
-				vect_push_free_string(&out->text, _var_get_from(out, base, mul));
+				vect_push_free_string(&out->text, from);
 				vect_push_string(&out->text, "; mul\n");
 			}
 			
 			// move back after mul
 			vect_push_string(&out->text, "\tmov ");
-			vect_push_free_string(&out->text, _var_get_store(out, base));
+			vect_push_free_string(&out->text, store);
 			vect_push_string(&out->text, ", ");
 			vect_push_free_string(&out->text, _op_get_register(1, _var_size(base)));
 			vect_push_string(&out->text, "; post-mul mov\n");
 		}
 	} else {
+		char *store = _var_get_store(out, base);
 		vect_push_string(&out->text, "\tmov ");
 		vect_push_free_string(&out->text, _op_get_register(1, _var_size(base)));
 		vect_push_string(&out->text, ", ");
-		vect_push_free_string(&out->text, _var_get_store(out, base));
+		vect_push_free_string(&out->text, store);
 		vect_push_string(&out->text, "; pre-mul mov\n");
 
 		if (mul->location == LOC_LITL) {
@@ -1937,8 +1972,9 @@ void var_op_mul(CompData *out, Variable *base, Variable *mul) {
 			vect_push_free_string(&out->text, _op_get_register(3, _var_size(base)));
 			vect_push_string(&out->text, "; mul\n");
 		} else {
+			char *from = _var_get_from(out, base, mul);
 			vect_push_string(&out->text, "\tmul ");
-			vect_push_free_string(&out->text, _var_get_from(out, base, mul));
+			vect_push_free_string(&out->text, from);
 			vect_push_string(&out->text, "; mul\n");
 		}
 		
@@ -4745,7 +4781,11 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 	Token *op_token = vect_get(tokens, op_pos);
 
 	// Based on op_token, split the two halves and recurse.
-	// TODO
+	
+	// if boolean, eval left to right, not right to left
+	if (op == 9) {
+
+	}
 	
 	Variable rhs = _eval(s, data, tokens, op_pos + 1, end);
 
@@ -4840,13 +4880,13 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 			}
 			break;
 		case '=':
-			var_op_eq(data, s, &out, &rhs);
+			var_op_beq(data, &out, &rhs);
 			break;
 		case '&':
 			var_op_band(data, s);
 			break;
 		case '|':
-			var_op_bor(data, s, &out, &rhs);
+			var_op_bor(data, s);
 			break;
 		case '<':
 			var_op_bsl(data, &out, &rhs);
@@ -4859,7 +4899,7 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 		switch(op_token->data[0]) {
 		case '!':
 			if (op_token->data[1] == '=') {
-				var_op_neq(data, &out, &rhs);
+				var_op_bne(data, &out, &rhs);
 			} else if (op_token->data[1] == '&') {
 				// Not impl
 			} else if (op_token->data[1] == '|') {
