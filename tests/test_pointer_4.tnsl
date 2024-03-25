@@ -1,0 +1,14 @@
+/; set (int` i)
+	i = 69
+;/
+
+/; set_b (int` j)
+	set(j)
+;/
+
+/; main [int]
+	int k = 0
+	set_b(~k)
+	return k
+;/
+

@@ -1,0 +1,10 @@
+/; main [int]
+
+	int i = 0
+
+	/; loop (int j = 0; j < 70) [j++]
+		i = j
+	;/
+
+	return i
+;/

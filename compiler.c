@@ -1938,6 +1938,26 @@ void var_op_bxor(CompData *out, Variable *lhs, Variable *rhs) {
 	// Nothing for now
 }
 
+void var_op_inc(CompData *out, Variable *lhs) {
+	if (lhs->location == LOC_LITL) {
+		lhs->offset++;
+	}
+	char *store = _var_get_store(out, lhs);
+	vect_push_string(&out->text, "\tinc ");
+	vect_push_free_string(&out->text, store);
+	vect_push_string(&out->text, " ; Increment\n\n");
+}
+
+void var_op_dec(CompData *out, Variable *lhs) {
+	if (lhs->location == LOC_LITL) {
+		lhs->offset--;
+	}
+	char *store = _var_get_store(out, lhs);
+	vect_push_string(&out->text, "\tdec ");
+	vect_push_free_string(&out->text, store);
+	vect_push_string(&out->text, " ; Decrement\n\n");
+}
+
 // Multiplies "base" by "mul" and sets "base" to the result.
 void var_op_mul(CompData *out, Variable *base, Variable *mul) {
 	if(base->location == LOC_LITL) {
@@ -4882,8 +4902,20 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 			return out;
 		} else {
 			printf("ERROR: Unexpected prefix token\n");
+			p2_error = true;
 			return rhs;
 		}
+	} else if (op_pos == end - 1) {
+		Variable lhs = _eval(s, data, tokens, start, op_pos);
+		if (tok_str_eq(op_token, "++")) {
+			var_op_inc(data, &lhs);
+		} else if (tok_str_eq(op_token, "--")) {
+			var_op_dec(data, &lhs);
+		} else {
+			printf("ERROR: Unexpected suffix token\n");
+			p2_error = true;
+		}
+		return lhs;
 	}
 	
 	Variable rhs = _eval(s, data, tokens, op_pos + 1, end);
@@ -5427,6 +5459,7 @@ void p2_compile_def(Scope *s, CompData *out, Vector *tokens, size_t *pos, Vector
 			// Split def
 			if(*pos - start > 1) {
 				Variable store = _eval(s, out, tokens, start, *pos);
+				scope_free_all_tmp(s, out);
 				var_end(&store);
 			}
 			start = *pos + 1;
@@ -5439,6 +5472,7 @@ void p2_compile_def(Scope *s, CompData *out, Vector *tokens, size_t *pos, Vector
 	var_end(&type);
 	if (*pos - start > 1) {
 		Variable store = _eval(s, out, tokens, start, *pos);
+		scope_free_all_tmp(s, out);
 		var_end(&store);
 	}
 }
@@ -5586,6 +5620,7 @@ void p2_compile_control(Scope *s, Function *f, CompData *out, Vector *tokens, si
 				if (build != start) {
 					// Eval, check ending
 					Variable v = _eval(&sub, out, tokens, start, build);
+					scope_free_all_tmp(&sub, out);
 					if (strcmp(v.type->name, "bool") == 0 && tok_str_eq(t, ")")) {
 						build = start - 1;
 						start = b_end;
@@ -5701,6 +5736,7 @@ void p2_compile_control(Scope *s, Function *f, CompData *out, Vector *tokens, si
 				if (rep != start) {
 					// Eval, check ending
 					Variable v = _eval(&sub, out, tokens, start, rep);
+					scope_free_all_tmp(&sub, out);
 					if (strcmp(v.type->name, "bool") == 0 && tok_str_eq(t, "]") && scope_name_eq(&sub, "loop")) {
 						rep = start - 1;
 						start = r_end;
@@ -5735,11 +5771,12 @@ void p2_compile_control(Scope *s, Function *f, CompData *out, Vector *tokens, si
 			while(!tok_str_eq(t, ")")) {
 				if (t->type == TT_DELIMIT) {
 					b_end = tnsl_find_closing(tokens, b_end);
-					b_end++;
 				}
+				b_end++;
 				t = vect_get(tokens, b_end);
 			}
 			Variable v = _eval(&sub, out, tokens, build, b_end);
+			scope_free_all_tmp(&sub, out);
 			vect_push_string(&out->text, "\tjnz ");
 			vect_push_free_string(&out->text, scope_label_start(&sub));
 			vect_push_string(&out->text, "; Conditional rep\n");

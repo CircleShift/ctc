@@ -1,0 +1,11 @@
+/; main [int]
+	int a, b
+	a = 69
+	b = 0
+
+	/; if (a > b)
+		return a
+	;/
+
+	return b
+;/

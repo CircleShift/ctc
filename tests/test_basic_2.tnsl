@@ -1,0 +1,5 @@
+/; main [int]
+	int i = 68
+	i++
+	return i
+;/
