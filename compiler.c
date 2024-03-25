@@ -1252,10 +1252,10 @@ char *_var_get_from(CompData *out, Variable *store, Variable *from) {
 	} else if (from->location == LOC_LITL) {
 		if (store->location == LOC_LITL) {
 			vect_push_string(&out->text, "\tmov rsi, ");
-			vect_push_free_string(&out->text, int_to_str(store->offset));
+			vect_push_free_string(&out->text, int_to_str(from->offset));
 			vect_push_string(&out->text, "; litl set\n");
 			if (store->type != NULL)
-				return _op_get_register(5, _var_size(store));
+				return _op_get_register(5, store->type->size);
 			return _op_get_register(5, 8); 
 		} else if (store->location < 1 || _var_ptr_type(store) == PTYPE_REF) {
 			vect_push_string(&out->text, "\tmov ");
@@ -1840,6 +1840,7 @@ Variable var_op_cmpbase(CompData *out, Variable *base, Variable *cmp, char *cc) 
 	vect_push_free_string(&out->text, store);
 	vect_push_string(&out->text, ", ");
 	vect_push_free_string(&out->text, from);
+	vect_push_string(&out->text, "\n");
 	
 	// prime rax and rdx
 	vect_push_string(&out->text, "\tmov rax, 0\n");
@@ -1849,7 +1850,7 @@ Variable var_op_cmpbase(CompData *out, Variable *base, Variable *cmp, char *cc) 
 	vect_push_string(&out->text, "\tcmov");
 	vect_push_string(&out->text, cc);
 	vect_push_string(&out->text, " rax, rdx ; bool gen\n");
-	vect_push_string(&out->text, "\ttest rax, rax ; less than test\n");
+	vect_push_string(&out->text, "\ttest rax, rax ; less than test\n\n");
 
 	// Generate variable
 	Variable v = var_init("#bool", typ_get_inbuilt("bool"));
@@ -2441,6 +2442,7 @@ bool tok_eq(Token *a, Token *b) {
 
 char *KEYWORDS = "module,export,asm,if,else,loop,label,goto,continue,break,return,import,as,using,struct,method,interface,enum,implements,operator,len,is";
 char *KEYTYPES = "uint8,uint16,uint32,uint64,uint,int8,int16,int32,int64,int,float32,float64,float,comp64,comp,bool,vect,void,type";
+char *LITERALS = "false,true";
 
 char *RESERVED = "~`!@#$%^&*()[]{}+-=\"\'\\|:;/?>.<,";
 
@@ -2511,6 +2513,8 @@ int token_type(char*data) {
 		return TT_KEYTYPE;
 	} else if (in_csv(KEYWORDS, data)) {
 		return TT_KEYWORD;
+	} else if (in_csv(LITERALS, data)){
+		return TT_LITERAL;
 	}
 
 	return TT_DEFWORD;
@@ -4035,10 +4039,6 @@ int _scope_avail_reg(Scope *s) {
 Variable scope_mk_tmp(Scope *s, CompData *data, Variable *v) {
 	Variable out = var_copy(v);
 
-	while (_var_ptr_type(&out) == PTYPE_REF) {
-		vect_pop(&out.ptr_chain);
-	}
-
 	int p_typ = _var_ptr_type(v);
 
 	free(out.name);
@@ -4148,7 +4148,7 @@ void scope_free_to(Scope *s, CompData *data, Variable *v) {
 
 	for (size_t i = s->stack_vars.count; i > 0; i--) {
 		Variable *cur = vect_get(&s->stack_vars, i - 1);
-		if (cur->offset < v->offset) {
+		if (cur->offset < v->offset || v->offset == 0) {
 			var_end(cur);
 			vect_pop(&s->stack_vars);
 			freed = true;
@@ -4157,7 +4157,7 @@ void scope_free_to(Scope *s, CompData *data, Variable *v) {
 		}
 	}
 
-	if (freed) {
+	if (freed || v->offset == 0) {
 		int next_loc = _scope_next_stack_loc(s, 0);
 		vect_push_string(&data->text, "\tlea rsp, [rbp - ");
 		vect_push_free_string(&data->text, int_to_str(-next_loc));
@@ -4732,7 +4732,17 @@ Variable _eval_literal(Scope *s, CompData *data, Vector *tokens, size_t literal)
 		free(label);
 		int arr_t = str_dat.count;
 		vect_push(&out.ptr_chain, &arr_t);
-
+	} else if (tok_str_eq(t, "false") || tok_str_eq(t, "true")) {
+		out.type = typ_get_inbuilt("bool");
+		if (tok_str_eq(t, "true")) {
+			vect_push_string(&data->text, "\tmov rax, 1\n");
+			vect_push_string(&data->text, "\ttest rax, rax ; literal bool\n\n");
+			out.offset = 1;
+		} else {
+			vect_push_string(&data->text, "\tmov rax, 0\n");
+			vect_push_string(&data->text, "\ttest rax, rax ; literal bool\n\n");
+			out.offset = 0;
+		}
 	} else {
 		out.location = LOC_LITL;
 		if (t->data[0] == '\'')
@@ -5461,6 +5471,43 @@ void _p2_func_scope_end(CompData *out, Scope *fs) {
 
 }
 
+void p2_compile_control(Scope *s, Function *f, CompData *out, Vector *tokens, size_t *pos, Vector *p_list);
+
+void p2_wrap_control(Scope *s, Function *f, CompData *out, Vector *tokens, size_t *pos, Vector *p_list) {
+	Scope sub = scope_subscope(s, "wrap");
+
+	int end;
+	Token *cur;
+	bool first = true;
+	for (;*pos < tokens->count;) {
+		end = tnsl_find_closing(tokens, *pos);
+		cur = vect_get(tokens, *pos);
+		if (end < 0 || (!tok_str_eq(cur, "/;") && !tok_str_eq(cur, ";;"))) {
+			break;
+		}
+
+		cur = vect_get(tokens, *pos + 1);
+		
+		if (tok_str_eq(cur, "if") && first) {
+			p2_compile_control(&sub, f, out, tokens, pos, p_list);
+			first = false;
+		} else if (tok_str_eq(cur, "else") && !first) {
+			p2_compile_control(&sub, f, out, tokens, pos, p_list);
+		} else {
+			if (tok_str_eq(cur, "else") && first) {
+				printf("ERROR: Expected if block before else block (%d:%d)\n\n", cur->line, cur->col);
+			}
+			break;
+		}
+		
+		*pos = end;
+	}
+	
+	vect_push_free_string(&out->text, scope_label_end(&sub));
+	vect_push_string(&out->text, ":\n\n");
+	scope_end(&sub);
+}
+
 // TODO loop blocks, if blocks, else blocks
 void p2_compile_control(Scope *s, Function *f, CompData *out, Vector *tokens, size_t *pos, Vector *p_list) {
 	int end = tnsl_find_closing(tokens, *pos);
@@ -5475,13 +5522,27 @@ void p2_compile_control(Scope *s, Function *f, CompData *out, Vector *tokens, si
 	*pos += 1;
 	t = vect_get(tokens, *pos);
 
-	Scope wrap = {0};
 	Scope sub;
 
-	// Get 
-	if (tok_str_eq(t, "if")) {
-		wrap = scope_subscope(s, "wrap");
-		sub = scope_subscope(&wrap, t->data);
+	// Generate wrap for if if none exists
+	if (tok_str_eq(t, "if") || tok_str_eq(t, "else")) {
+		if (s->parent == NULL || !scope_name_eq(s, "wrap")) {
+			*pos -= 1;
+			p2_wrap_control(s, f, out, tokens, pos, p_list);
+			return;
+		}
+	}
+
+	// Generate subscope
+	if (tok_str_eq(t, "if") || tok_str_eq(t, "else")) {
+		t = vect_get(tokens, *pos + 1);
+		if (tok_str_eq(t, "if")) {
+			*pos += 1;
+			sub = scope_subscope(s, "elif");
+		} else {
+			t = vect_get(tokens, *pos);
+			sub = scope_subscope(s, t->data);
+		}
 	} else if (t->type != TT_KEYWORD || !tok_str_eq(t, "loop")) {
 		printf("ERROR: Expected control block type ('loop' or 'if'), found \"%s\" (%d:%d)\n", t->data, t->line, t->col);
 		p2_error = true;
@@ -5528,10 +5589,9 @@ void p2_compile_control(Scope *s, Function *f, CompData *out, Vector *tokens, si
 					if (strcmp(v.type->name, "bool") == 0 && tok_str_eq(t, ")")) {
 						build = start - 1;
 						start = b_end;
-						var_op_test(out, &v);
-						vect_push_string(&out->data, "\tjz ");
-						vect_push_free_string(&out->data, scope_label_end(&sub));
-						vect_push_string(&out->data, "; Conditional start\n");
+						vect_push_string(&out->text, "\tjz ");
+						vect_push_free_string(&out->text, scope_label_end(&sub));
+						vect_push_string(&out->text, "; Conditional start\n");
 					} else {
 						start = build + 1;
 					}
@@ -5640,45 +5700,69 @@ void p2_compile_control(Scope *s, Function *f, CompData *out, Vector *tokens, si
 				if (rep != start) {
 					// Eval, check ending
 					Variable v = _eval(&sub, out, tokens, start, rep);
-					if (strcmp(v.type->name, "bool") == 0 && tok_str_eq(t, "]") && strcmp(sub.name, "loop") == 0) {
+					if (strcmp(v.type->name, "bool") == 0 && tok_str_eq(t, "]") && scope_name_eq(&sub, "loop")) {
 						rep = start - 1;
 						start = r_end;
-						var_op_test(out, &v);
 						vect_push_string(&out->text, "\tjnz ");
 						vect_push_free_string(&out->text, scope_label_start(&sub));
 						vect_push_string(&out->text, "; Conditional rep\n");
 					} else {
-						start = build + 1;
+						start = rep + 1;
 					}
 					var_end(&v);
 				} else {
-					start = build + 1;
+					start = rep + 1;
 				}
 			} else if (t->type == TT_DELIMIT) {
-				build = tnsl_find_closing(tokens, build);
+				rep = tnsl_find_closing(tokens, rep);
 			}
 		}
 
-		if (build > r_end) {
-			build = -1;
+		if (rep > r_end) {
+			rep = -1;
 		}
 	}
 
+	Variable free_to = {0};
+	
+	// Post control
 	if (scope_name_eq(&sub, "loop")) {
+		if (build >= 0 && rep < 0) {
+			// find end of build, re-eval and cond jmp
+			int b_end = build;
+			t = vect_get(tokens, b_end);
+			while(!tok_str_eq(t, ")")) {
+				if (t->type == TT_DELIMIT) {
+					b_end = tnsl_find_closing(tokens, b_end);
+					b_end++;
+				}
+				t = vect_get(tokens, b_end);
+			}
+			Variable v = _eval(&sub, out, tokens, build, b_end);
+			vect_push_string(&out->text, "\tjnz ");
+			vect_push_free_string(&out->text, scope_label_start(&sub));
+			vect_push_string(&out->text, "; Conditional rep\n");
+			var_end(&v);
+
+		} else if (build < 0 && rep < 0) {
+			vect_push_string(&out->text, "\tjmp ");
+			vect_push_free_string(&out->text, scope_label_start(&sub));
+			vect_push_string(&out->text, "\n");
+		}
+	} else {
+		// Jmp to outer wrap at end of if
+		scope_free_to(&sub, out, &free_to);
+		vect_push_string(&out->text, "\tjmp ");
+		vect_push_free_string(&out->text, scope_label_end(s));
+		vect_push_string(&out->text, "\n");
 	}
-
-
+	
+	// Cleanup scope
 	vect_push_free_string(&out->text, scope_label_end(&sub));
 	vect_push_string(&out->text, ": ; End label\n");
-
-	// Scope cleanup
+	scope_free_to(&sub, out, &free_to);
 	scope_end(&sub);
-
-	if (wrap.name != NULL) {
-		vect_push_free_string(&out->text, scope_label_end(&wrap));
-		vect_push_string(&out->text, ": ; End wrap label\n");
-		scope_end(&wrap);
-	}
+	vect_push_string(&out->text, "\n\n");
 }
 
 // Handles the 'self' variable in the case where the function is in a method block.
