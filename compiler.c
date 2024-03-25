@@ -5613,7 +5613,8 @@ void p2_compile_control(Scope *s, Function *f, CompData *out, Vector *tokens, si
 	vect_push_string(&out->text, ": ; Start label\n");
 
 	// Main loop statements
-	for(; *pos <= end; *pos = tnsl_next_non_nl(tokens, *pos)) {
+	*pos = tnsl_next_non_nl(tokens, *pos - 1);
+	for(; *pos < end; *pos = tnsl_next_non_nl(tokens, *pos)) {
 		t = vect_get(tokens, *pos);
 		if (tok_str_eq(t, "/;") || tok_str_eq(t, ";;")) {
 			size_t b_open = *pos;
