@@ -5,7 +5,13 @@
 	a.push(~c)
 ;/
 
-/; main [int]
+/; main (int argc, ~~uint8 argv) [int]
+	
+	asm "mov r10, rdi"
+	asm "mov r11, rsi"
+	
+	_print_num(PUSH_STR, argc)
+
 	Vector a
 	a.init(1)
 	

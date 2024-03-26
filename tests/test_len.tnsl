@@ -1,0 +1,20 @@
+struct A {
+	int i, j, k, l
+}
+
+struct B {
+	uint a, b, c, d
+}
+
+struct C {
+	bool x,
+	uint32 y
+}
+
+/; main [int]
+	A a
+	B b
+	C c
+	return len a + len b + len c
+;/
+

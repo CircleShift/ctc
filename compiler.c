@@ -2445,14 +2445,14 @@ bool tok_eq(Token *a, Token *b) {
 #define TT_DELIMIT 5
 #define TT_SPLITTR 6
 
-char *KEYWORDS = "module,export,asm,if,else,loop,label,goto,continue,break,return,import,as,using,struct,method,interface,enum,implements,operator,len,is";
+char *KEYWORDS = "module,export,asm,if,else,loop,label,goto,continue,break,return,import,as,using,struct,method,interface,enum,implements,operator,is";
 char *KEYTYPES = "uint8,uint16,uint32,uint64,uint,int8,int16,int32,int64,int,float32,float64,float,comp64,comp,bool,vect,void,type";
 char *LITERALS = "false,true";
 
 char *RESERVED = "~`!@#$%^&*()[]{}+-=\"\'\\|:;/?>.<,";
 
 char *OPS = "~`!%&|^*/+-=.<>@";
-char *MULTI_OPS = "==,&&,||,^^,!==,!&&,!||,!^^,!<,!>,<<,>>,!&,!|,!^,++,--,>==,<==,+=,-=,*=,/=,%=,!=,&=,|=,^=,~=,`=";
+char *MULTI_OPS = "==,&&,||,^^,!==,!&&,!||,!^^,!<,!>,<<,>>,!&,!|,!^,++,--,>==,<==,+=,-=,*=,/=,%=,!=,&=,|=,^=,~=,`=,len";
 
 char *DELIMS = "()[]{}";
 char *MULTI_DELIMS = ";:#";
@@ -2503,17 +2503,13 @@ int token_type(char*data) {
 	
 	if (is_delim(data))
 		return TT_DELIMIT;
-	else if (is_reserved(data[0])) {
-		if (l == 1) {
-			if (strchr(OPS, data[0]) != NULL)
-				return TT_AUGMENT;
-			else if (data[0] == ',' || data[0] == ';' || data[0] == ':')
-				return TT_SPLITTR;
-		} else if (l == 2 && in_csv(MULTI_OPS, data)) {
+	else if (is_reserved(data[0]) && l == 1) {
+		if (strchr(OPS, data[0]) != NULL)
 			return TT_AUGMENT;
-		} else if (l == 3 && in_csv(MULTI_OPS, data)) {
+		else if (data[0] == ',' || data[0] == ';' || data[0] == ':')
+			return TT_SPLITTR;
+	} else if (in_csv(MULTI_OPS, data)) {
 			return TT_AUGMENT;
-		}
 	} else if (in_csv(KEYTYPES, data)) {
 		return TT_KEYTYPE;
 	} else if (in_csv(KEYWORDS, data)) {
@@ -4651,7 +4647,7 @@ Variable _eval_dot(Scope *s, CompData *data, Vector *tokens, size_t start, size_
 	if (start == end - 1) {
 		Variable v = scope_get_var(s, &name);
 		if (v.name == NULL) {
-			printf("ERROR: Failed to find variable or call in dot chain \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+			printf("ERROR: Failed to find singlet variable or call in dot chain \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
 			p2_error = true;
 		}
 		art_end(&name);
@@ -4933,6 +4929,12 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 			var_end(&rhs);
 			
 			var_op_not(data, &out);
+			return out;
+		} else if (tok_str_eq(op_token, "len")){
+			out = var_init("#literal", typ_get_inbuilt("uint"));
+			out.location = LOC_LITL;
+			out.offset = rhs.type->size;
+			var_end(&rhs);
 			return out;
 		} else {
 			printf("ERROR: Unexpected prefix token\n");
