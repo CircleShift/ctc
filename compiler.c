@@ -4535,6 +4535,15 @@ Variable _eval_call(Scope *s, CompData *data, Vector *tokens, Function *f, Varia
 			// create tmp var
 			Variable set = scope_mk_stmp(s, data, cur);
 			Variable from = _eval(s, data, tokens, pstart, pend);
+
+			if (from.name == NULL) {
+				Token *p = vect_get(tokens, pstart);
+				printf("ERROR: Expected value for parameter \"%s\" in call to function \"%s\" (%d:%d)\n", cur->name, f->name, p->line, p->col);
+				p2_error = true;
+				i = f->inputs.count;
+				break;
+			}
+
 			// eval and set
 			if (_var_ptr_type(&set) == PTYPE_REF)
 				var_op_pure_set(data, &set, &from);
@@ -4591,6 +4600,15 @@ Variable _eval_call(Scope *s, CompData *data, Vector *tokens, Function *f, Varia
 			Variable set = scope_mk_stmp(s, data, cur);
 			// eval and set
 			Variable from = _eval(s, data, tokens, pstart, pend);
+
+			if (from.name == NULL) {
+				Token *p = vect_get(tokens, pstart);
+				printf("ERROR: Expected value for parameter \"%s\" in call to function \"%s\" (%d:%d)\n", cur->name, f->name, p->line, p->col);
+				p2_error = true;
+				i = f->inputs.count;
+				break;
+			}
+
 			if (_var_ptr_type(&set) == PTYPE_REF)
 				var_op_pure_set(data, &set, &from);
 			else
