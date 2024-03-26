@@ -2279,7 +2279,11 @@ void *mod_find_rec(Module *mod, Artifact *art, size_t sub, int find_type) {
 		void *out = NULL;
 		for (size_t i = 0; i < mod->submods.count; i++) {
 			Module *m = vect_get(&(mod->submods), i);
-			if (strcmp(m->name, *to_check) == 0 || strcmp(m->name, e_check.data) == 0 || strcmp(m->name, t_check.data)) {
+			if (
+				strcmp(m->name, *to_check) == 0 ||
+				strcmp(m->name, e_check.data) == 0 ||
+				strcmp(m->name, t_check.data) == 0
+			) {
 				out = mod_find_rec(m, art, sub + 1, find_type);
 				break;
 			}
@@ -4704,6 +4708,7 @@ Variable _eval_dot(Scope *s, CompData *data, Vector *tokens, size_t start, size_
 			if (v.name == NULL) {
 				Function *f = mod_find_func(s->current, &name);
 				if (f == NULL) {
+					t = vect_get(tokens, start - 1);
 					printf("ERROR: Could not find function \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
 					art_end(&name);
 					return v;
@@ -4712,6 +4717,7 @@ Variable _eval_dot(Scope *s, CompData *data, Vector *tokens, size_t start, size_
 			} else {
 				Function *m = mod_find_func(v.type->module, &name);
 				if (m == NULL) {
+					t = vect_get(tokens, start - 1);
 					printf("ERROR: Could not find function \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
 					art_end(&name);
 					return v;
