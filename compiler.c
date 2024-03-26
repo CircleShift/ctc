@@ -6412,7 +6412,7 @@ int main(int argc, char ** argv) {
 		help();
 		return 1;
 	} else if (strcmp(argv[1], "-v") == 0) {
-		printf("C based TNSL Compiler (CTC) - version 0.1\n");
+		printf("C based TNSL Compiler (CTC) - version 0.4\n");
 		return 0;
 	} else if (strcmp(argv[1], "-t") == 0) {
 		Artifact in = art_from_str(argv[2], '/');
