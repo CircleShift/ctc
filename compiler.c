@@ -2374,15 +2374,22 @@ char *mod_full_path(Module *m) {
 	return vect_as_string(&out);
 }
 
-char *mod_label_prefix(Module *m) {
-	Vector out = vect_from_string("");
-	
-	while (m->parent != NULL) {
-		vect_push_string(&out, m->name);
-		vect_push_string(&out, ".");
-		m = m->parent;
+Vector _mod_label_prefix(Module *m) {
+	if (m == NULL) {
+		Vector out = vect_from_string("");
+		return out;
 	}
 
+	Vector out = _mod_label_prefix(m->parent);
+	vect_push_string(&out, m->name);
+	if (out.count > 0) {
+		vect_push_string(&out, ".");
+	}
+	return out;
+}
+
+char *mod_label_prefix(Module *m) {
+	Vector out = _mod_label_prefix(m);
 	return vect_as_string(&out);
 }
 
@@ -3905,6 +3912,8 @@ void p1_resolve_types(Module *root) {
 
 	for(size_t i = 0; i < root->submods.count; i++) {
 		p1_resolve_types(vect_get(&root->submods, i));
+		Module *s = vect_get(&root->submods, i);
+		s->parent = root;
 	}
 
 	for(size_t i = 0; i < root->funcs.count; i++) {
