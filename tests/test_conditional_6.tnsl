@@ -1,0 +1,8 @@
+/; main [int]
+	bool a = false
+	/; if (false || !a && true)
+		return 69
+	;/
+
+	return 0
+;/

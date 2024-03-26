@@ -1,0 +1,20 @@
+
+/; main [int]
+
+	/; if (true && false)
+		return 0
+	;; else if (false && true)
+		return 1
+	;; else if (false && false)
+		return 2
+	;/
+
+	/; if (false || false)
+		return 3
+	;; else if (true || false)
+		return 69
+	;/
+
+	return 4
+
+;/

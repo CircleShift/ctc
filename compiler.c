@@ -1725,10 +1725,20 @@ void var_op_not(CompData *out, Variable *base) {
 	}
 
 	char *not_store = _var_get_store(out, base);
-
-	vect_push_string(&out->text, "\tnot ");
-	vect_push_free_string(&out->text, not_store);
-	vect_push_string(&out->text, " ; Complete not\n");
+	if (base->type != NULL && strcmp(base->type->name, "bool") == 0) {
+		// boolean not
+		vect_push_string(&out->text, "\tnot ");
+		vect_push_string(&out->text, not_store);
+		vect_push_string(&out->text, "\n");
+		vect_push_string(&out->text, "\tand ");
+		vect_push_free_string(&out->text, not_store);
+		vect_push_string(&out->text, ", 1 ; Complete and\n");
+	} else {
+		// normal not
+		vect_push_string(&out->text, "\tnot ");
+		vect_push_free_string(&out->text, not_store);
+		vect_push_string(&out->text, " ; Complete not\n");
+	}
 }
 
 // test base with itself
@@ -1749,7 +1759,7 @@ void var_op_test(CompData *out, Variable *base) {
 	vect_push_free_string(&out->text, test_store);
 	vect_push_string(&out->text, ", ");
 	vect_push_free_string(&out->text, test_from);
-	vect_push_string(&out->text, " ; Complete not\n");
+	vect_push_string(&out->text, " ; Complete test\n");
 }
 
 // bit shift base left by "bsl"
@@ -1916,26 +1926,6 @@ void var_op_ne(CompData *out, Variable *base, Variable *cmp) {
 	Variable tmp = var_op_cmpbase(out, base, cmp, "ne");
 	var_end(base);
 	*base = tmp;
-}
-
-// Boolean and
-void var_op_band(CompData *out, Scope *s) {
-	// Just parsed the left side, short circuit if zero
-	vect_push_string(&out->text, "\tjz ");
-	vect_push_free_string(&out->text, scope_gen_bool_label(s));
-	vect_push_string(&out->text, "false ; bool and\n\n");
-}
-
-// Boolean or
-void var_op_bor(CompData *out, Scope *s) {
-	// Just parsed the left side, short circuit if zero
-	vect_push_string(&out->text, "\tjnz ");
-	vect_push_free_string(&out->text, scope_gen_bool_label(s));
-	vect_push_string(&out->text, "true ; bool or\n\n");
-}
-
-void var_op_bxor(CompData *out, Variable *lhs, Variable *rhs) {
-	// Nothing for now
 }
 
 void var_op_inc(CompData *out, Variable *lhs) {
@@ -4808,6 +4798,7 @@ Variable _eval_literal(Scope *s, CompData *data, Vector *tokens, size_t literal)
 			vect_push_string(&data->text, "\ttest rax, rax ; literal bool\n\n");
 			out.offset = 0;
 		}
+		out.location = LOC_LITL;
 	} else {
 		out.location = LOC_LITL;
 		if (t->data[0] == '\'')
@@ -4843,9 +4834,11 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 			} else {
 				i = dcl;
 			}
-		} else if (t->type == TT_AUGMENT && op_order(t) > op) {
-			op = op_order(t);
-			op_pos = i;
+		} else if (t->type == TT_AUGMENT) {
+			if (op_order(t) > op || (op_order(t) == op && op == 9)) {
+				op = op_order(t);
+				op_pos = i;
+			}
 		}
 	}
 
@@ -4919,9 +4912,35 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 	
 	// if boolean, eval left to right, not right to left
 	if (op == 9) {
-		printf("ERROR: TO IMPL BOOL\n");
-		p2_error = true;
-		return out;
+		Variable lhs = _eval(s, data, tokens, start, op_pos);
+
+		char chk = op_token->data[0];
+		if (op_token->data[0] == '!') {
+			printf("WARN: TO IMPL BOOLEAN NOT\n");
+			chk = op_token->data[1];
+		}
+
+		Variable rhs;
+		if (chk == '&') {
+			vect_push_string(&data->text, "\tjz ");
+			vect_push_free_string(&data->text, scope_gen_bool_label(s));
+			vect_push_string(&data->text, " ; boolean and\n");
+			rhs = _eval(s, data, tokens, op_pos + 1, end);
+		} else if (chk == '|') {
+			vect_push_string(&data->text, "\tjnz ");
+			vect_push_free_string(&data->text, scope_gen_bool_label(s));
+			vect_push_string(&data->text, " ; boolean or\n");
+			rhs = _eval(s, data, tokens, op_pos + 1, end);
+		} else if (chk == '^') {
+			
+		}
+
+		vect_push_free_string(&data->text, scope_gen_bool_label(s));
+		vect_push_string(&data->text, ": ; boolean end\n");
+		scope_adv_bool_label(s);
+		
+		var_end(&rhs);
+		return lhs;
 	}
 	
 	if (op_pos == start) {

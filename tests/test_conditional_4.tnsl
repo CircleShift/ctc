@@ -1,0 +1,16 @@
+
+/; main [int]
+	int a = 0
+	int b = 69
+	int c = 70
+
+	/; if (a < b && b > c)
+		return c
+	;; else if (b > c && a < b)
+		return a
+	;; else if (a > b && b > c)
+		return 1
+	;/
+
+	return b
+;/
