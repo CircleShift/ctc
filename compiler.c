@@ -1155,7 +1155,7 @@ void _var_op_set_ptr(CompData *out, Variable *store, Variable *from) {
 		
 		int *cur;
 		for (size_t i = from->ptr_chain.count - 1; i > 0; i--) {
-			cur = vect_get(&store->ptr_chain, i - 1);
+			cur = vect_get(&from->ptr_chain, i - 1);
 			if (*cur == PTYPE_REF) {
 				vect_push_string(&out->text, "\tmov rsi, [rsi]\n");
 			} else {
