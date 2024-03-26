@@ -1971,66 +1971,41 @@ void var_op_mul(CompData *out, Variable *base, Variable *mul) {
 	}
 
 	if(base->type->name[0] == 'i') {
-		// Integer multiplication
-		if (base->location > 0 && mul->location != LOC_LITL) {
-			char *store = _var_get_store(out, base);
-			char *from = _var_get_from(out, base, mul);
+		// Integer mul
+		char *store = _var_get_store(out, base);
+		vect_push_string(&out->text, "\tmov ");
+		vect_push_free_string(&out->text, _op_get_register(1, _var_size(base)));
+		vect_push_string(&out->text, ", ");
+		vect_push_string(&out->text, store);
+		vect_push_string(&out->text, "; pre-mul mov\n");
 
-			vect_push_string(&out->text, "\timul ");
-			vect_push_free_string(&out->text, store);
-			vect_push_string(&out->text, ", ");
-			vect_push_free_string(&out->text, from);
-			vect_push_string(&out->text, "; complete mul\n\n");
-		} else if (base->location > 0) {
+		if (mul->location == LOC_LITL) {
 			vect_push_string(&out->text, "\tmov rcx, ");
 			vect_push_free_string(&out->text, int_to_str(mul->offset));
 			vect_push_string(&out->text, "; literal load\n");
 
-			char *store = _var_get_store(out, base);
-
 			vect_push_string(&out->text, "\timul ");
-			vect_push_free_string(&out->text, store);
-			vect_push_string(&out->text, ", ");
 			vect_push_free_string(&out->text, _op_get_register(3, _var_size(base)));
-			vect_push_string(&out->text, "; complete mul\n\n");
+			vect_push_string(&out->text, "; imul\n");
 		} else {
-			char *store = _var_get_store(out, base);
-
-			// Mov to rax for the multiplication, move back after.
-			vect_push_string(&out->text, "\tmov ");
-			vect_push_free_string(&out->text, _op_get_register(1, _var_size(base)));
-			vect_push_string(&out->text, ", ");
-			vect_push_string(&out->text, store);
-			vect_push_string(&out->text, "; pre-mul mov\n");
-
-			if (mul->location == LOC_LITL) {
-				vect_push_string(&out->text, "\tmov rcx, ");
-				vect_push_free_string(&out->text, int_to_str(mul->offset));
-				vect_push_string(&out->text, "; literal load\n");
-
-				vect_push_string(&out->text, "\timul ");
-				vect_push_free_string(&out->text, _op_get_register(3, _var_size(base)));
-				vect_push_string(&out->text, "; mul\n");
-			} else {
-				char *from = _var_get_from(out, base, mul);
-				vect_push_string(&out->text, "\timul ");
-				vect_push_free_string(&out->text, from);
-				vect_push_string(&out->text, "; mul\n");
-			}
-			
-			// move back after mul
-			vect_push_string(&out->text, "\tmov ");
-			vect_push_free_string(&out->text, store);
-			vect_push_string(&out->text, ", ");
-			vect_push_free_string(&out->text, _op_get_register(1, _var_size(base)));
-			vect_push_string(&out->text, "; post-mul mov\n");
+			char *from = _var_get_from(out, base, mul);
+			vect_push_string(&out->text, "\timul ");
+			vect_push_free_string(&out->text, from);
+			vect_push_string(&out->text, "; imul\n");
 		}
+		
+		// move back after mul
+		vect_push_string(&out->text, "\tmov ");
+		vect_push_free_string(&out->text, store);
+		vect_push_string(&out->text, ", ");
+		vect_push_free_string(&out->text, _op_get_register(1, _var_size(base)));
+		vect_push_string(&out->text, "; post-mul mov\n");
 	} else {
 		char *store = _var_get_store(out, base);
 		vect_push_string(&out->text, "\tmov ");
 		vect_push_free_string(&out->text, _op_get_register(1, _var_size(base)));
 		vect_push_string(&out->text, ", ");
-		vect_push_free_string(&out->text, store);
+		vect_push_string(&out->text, store);
 		vect_push_string(&out->text, "; pre-mul mov\n");
 
 		if (mul->location == LOC_LITL) {
@@ -2050,7 +2025,7 @@ void var_op_mul(CompData *out, Variable *base, Variable *mul) {
 		
 		// move back after mul
 		vect_push_string(&out->text, "\tmov ");
-		vect_push_free_string(&out->text, _var_get_store(out, base));
+		vect_push_free_string(&out->text, store);
 		vect_push_string(&out->text, ", ");
 		vect_push_free_string(&out->text, _op_get_register(1, _var_size(base)));
 		vect_push_string(&out->text, "; post-mul mov\n");
@@ -2071,6 +2046,7 @@ void var_op_div(CompData *out, Variable *base, Variable *div) {
 	char *div_by;
 	if (base->type->name[0] == 'i') {
 		// mov into rax
+		char *store = _var_get_store(out, base);
 		switch(_var_size(base)) {
 		case 4:
 			vect_push_string(&out->text, "\tmovsxd rax, ");
@@ -2082,13 +2058,14 @@ void var_op_div(CompData *out, Variable *base, Variable *div) {
 			vect_push_string(&out->text, "\tmovsx rax, ");
 			break;
 		}
-		vect_push_free_string(&out->text, _var_get_store(out, base));
+		vect_push_free_string(&out->text, store);
 		vect_push_string(&out->text, "; initial mov\n\n");
 
 		// Calculate div_by
 		if(_var_size(base) > _var_size(div) && div->location == LOC_LITL) {
 			vect_push_string(&out->text, "\tmov rcx, ");
 			vect_push_free_string(&out->text, int_to_str(div->offset));
+			vect_push_string(&out->text, "\n");
 			div_by = _op_get_register(3, _var_size(base));
 
 		} else {
@@ -2102,6 +2079,7 @@ void var_op_div(CompData *out, Variable *base, Variable *div) {
 
 	} else {
 		// mov into rax
+		char *store = _var_get_store(out, base);
 		switch(_var_size(base)) {
 		case 4:
 			vect_push_string(&out->text, "\tmov eax, ");
@@ -2112,13 +2090,14 @@ void var_op_div(CompData *out, Variable *base, Variable *div) {
 		default:
 			vect_push_string(&out->text, "\tmovzx rax, ");
 		}
-		vect_push_free_string(&out->text, _var_get_store(out, base));
+		vect_push_free_string(&out->text, store);
 		vect_push_string(&out->text, "; initial mov\n\n");
 		
 		// Calculate div by
 		if(_var_size(base) > _var_size(div) && div->location == LOC_LITL) {
 			vect_push_string(&out->text, "\tmov rcx, ");
 			vect_push_free_string(&out->text, int_to_str(div->offset));
+			vect_push_string(&out->text, "\n");
 			div_by = _op_get_register(3, _var_size(base));
 
 		} else {
@@ -2132,8 +2111,9 @@ void var_op_div(CompData *out, Variable *base, Variable *div) {
 	}
 
 	// Mov back to base
+	char *store = _var_get_store(out, base);
 	vect_push_string(&out->text, "\tmov ");
-	vect_push_free_string(&out->text, _var_get_store(out, base));
+	vect_push_free_string(&out->text, store);
 	vect_push_string(&out->text, ", ");
 	vect_push_free_string(&out->text, _op_get_register(1, _var_size(base)));
 	vect_push_string(&out->text, "; final mov for div\n\n");
@@ -2154,6 +2134,7 @@ void var_op_mod(CompData *out, Variable *base, Variable *mod) {
 	char *div_by;
 	if (base->type->name[0] == 'i') {
 		// mov into rax
+		char *store = _var_get_store(out, base);
 		switch(_var_size(base)) {
 		case 4:
 			vect_push_string(&out->text, "\tmovsxd rax, ");
@@ -2165,13 +2146,14 @@ void var_op_mod(CompData *out, Variable *base, Variable *mod) {
 			vect_push_string(&out->text, "\tmovsx rax, ");
 			break;
 		}
-		vect_push_free_string(&out->text, _var_get_store(out, base));
+		vect_push_free_string(&out->text, store);
 		vect_push_string(&out->text, "; initial mov\n\n");
 
 		// Calculate div_by
 		if(_var_size(base) > _var_size(mod) && mod->location == LOC_LITL) {
 			vect_push_string(&out->text, "\tmov rcx, ");
 			vect_push_free_string(&out->text, int_to_str(mod->offset));
+			vect_push_string(&out->text, "\n");
 			div_by = _op_get_register(3, _var_size(base));
 
 		} else {
@@ -2185,6 +2167,7 @@ void var_op_mod(CompData *out, Variable *base, Variable *mod) {
 
 	} else {
 		// mov into rax
+		char *store = _var_get_store(out, base);
 		switch(_var_size(base)) {
 		case 4:
 			vect_push_string(&out->text, "\tmov eax, ");
@@ -2195,13 +2178,14 @@ void var_op_mod(CompData *out, Variable *base, Variable *mod) {
 		default:
 			vect_push_string(&out->text, "\tmovzx rax, ");
 		}
-		vect_push_free_string(&out->text, _var_get_store(out, base));
+		vect_push_free_string(&out->text, store);
 		vect_push_string(&out->text, "; initial mov\n\n");
 
 		// Calculate div by
 		if(_var_size(base) > _var_size(mod) && mod->location == LOC_LITL) {
 			vect_push_string(&out->text, "\tmov rcx, ");
 			vect_push_free_string(&out->text, int_to_str(mod->offset));
+			vect_push_string(&out->text, "\n");
 			div_by = _op_get_register(3, _var_size(base));
 
 		} else {
@@ -2215,8 +2199,9 @@ void var_op_mod(CompData *out, Variable *base, Variable *mod) {
 	}
 
 	// Mov back to base
+	char *store = _var_get_store(out, base);
 	vect_push_string(&out->text, "\tmov ");
-	vect_push_free_string(&out->text, _var_get_store(out, base));
+	vect_push_free_string(&out->text, store);
 	vect_push_string(&out->text, ", ");
 	vect_push_free_string(&out->text, _op_get_register(4, _var_size(base)));
 	vect_push_string(&out->text, "; final mov for mod\n\n");
@@ -4059,6 +4044,53 @@ int _scope_avail_reg(Scope *s) {
 Variable scope_mk_tmp(Scope *s, CompData *data, Variable *v) {
 	Variable out = var_copy(v);
 
+	while (_var_ptr_type(&out) == PTYPE_REF) {
+		vect_pop(&out.ptr_chain);
+	}
+
+	int p_typ = _var_ptr_type(v);
+
+	free(out.name);
+	Vector nm = vect_from_string("#tmp");
+	out.name = vect_as_string(&nm);
+
+	if ((is_inbuilt(v->type->name) && p_typ < 1) || p_typ == PTYPE_PTR || p_typ == PTYPE_PTR) {
+		int regs = _scope_avail_reg(s);
+		if (regs & 0b111) {
+			
+			if (regs & RMSK_B) {
+				out.location = 2;
+			} else if (regs & RMSK_8) {
+				out.location = 9;
+			} else if (regs & RMSK_9) {
+				out.location = 10;
+			}
+			out.offset = 0;
+
+			var_op_set(data, &out, v);
+
+			vect_push(&s->reg_vars, &out);
+			return var_copy(&out);
+		}
+	}
+
+	int loc = _scope_next_stack_loc(s, _var_pure_size(v));
+	
+	out.location = LOC_STCK;
+	out.offset = loc;
+
+	var_op_set(data, &out, v);
+
+	vect_push(&s->stack_vars, &out);
+	return var_copy(&out);
+}
+
+// Creates a new tmp variable from an existing variable
+// ALL TEMP VARIABLES SHOULD BE FREED BEFORE CREATING MORE
+// PERSISTANT VARIABLES TO PREVENT STACK CLUTTER!!!!!!
+Variable scope_mk_pure_tmp(Scope *s, CompData *data, Variable *v) {
+	Variable out = var_copy(v);
+
 	int p_typ = _var_ptr_type(v);
 
 	free(out.name);
@@ -4618,6 +4650,10 @@ Variable _eval_dot(Scope *s, CompData *data, Vector *tokens, size_t start, size_
 
 	if (start == end - 1) {
 		Variable v = scope_get_var(s, &name);
+		if (v.name == NULL) {
+			printf("ERROR: Failed to find variable or call in dot chain \"%s\" (%d:%d)\n\n", t->data, t->line, t->col);
+			p2_error = true;
+		}
 		art_end(&name);
 		return v;
 	}
@@ -4713,8 +4749,6 @@ Variable _eval_dot(Scope *s, CompData *data, Vector *tokens, size_t start, size_
 	}
 
 	art_end(&name);
-
-	// TODO: Dot eval post processing (calls to methods, dereference, and members of structs)
 
 	return v;
 }
@@ -4816,7 +4850,7 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 			// Handle dot chains and calls
 			out = _eval_dot(s, data, tokens, start, end);
 			if (out.location == 5) {
-				Variable tmp = scope_mk_tmp(s, data, &out);
+				Variable tmp = scope_mk_pure_tmp(s, data, &out);
 				var_end(&out);
 				out = tmp;
 			}
@@ -4848,7 +4882,7 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 					var_op_index(data, &store, &to_index, &index);
 					var_end(&index);
 					var_end(&to_index);
-					to_index = scope_mk_tmp(s, data, &store);
+					to_index = scope_mk_pure_tmp(s, data, &store);
 					var_end(&store);
 					return to_index;
 				} else if (dcl < end - 1) {
@@ -4920,20 +4954,16 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 	
 	Variable rhs = _eval(s, data, tokens, op_pos + 1, end);
 
-	if (!scope_is_tmp(&rhs) && rhs.location > 1 && rhs.location < 9) {
-		Variable tmp = scope_mk_tmp(s, data, &rhs);
-		var_end(&rhs);
-		rhs = tmp;
+	if (rhs.name == NULL) {
+		return out;
 	}
 
 	out = _eval(s, data, tokens, start, op_pos);
-	
-	if (op != 10 && !scope_is_tmp(&out) && out.location != LOC_LITL) {
-		Variable tmp = scope_mk_tmp(s, data, &out);
-		var_end(&out);
-		out = tmp;
+
+	if (out.name == NULL) {
+		return rhs;
 	}
-	
+
 	if (out.location == LOC_LITL) {
 		if (rhs.location != LOC_LITL) {
 			Variable tmp = rhs;
@@ -4942,6 +4972,11 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 		}
 	}
 	
+	if (op != 10 && out.location != LOC_LITL) {
+		Variable tmp = scope_mk_tmp(s, data, &out);
+		var_end(&out);
+		out = tmp;
+	}
 	
 	if (strlen(op_token->data) == 1) {
 		switch(op_token->data[0]) {
@@ -5621,7 +5656,8 @@ void p2_compile_control(Scope *s, Function *f, CompData *out, Vector *tokens, si
 					// Eval, check ending
 					Variable v = _eval(&sub, out, tokens, start, build);
 					scope_free_all_tmp(&sub, out);
-					if (strcmp(v.type->name, "bool") == 0 && tok_str_eq(t, ")")) {
+					
+					if (v.type != NULL && strcmp(v.type->name, "bool") == 0 && tok_str_eq(t, ")")) {
 						build = start - 1;
 						start = b_end;
 						vect_push_string(&out->text, "\tjz ");
@@ -5630,7 +5666,10 @@ void p2_compile_control(Scope *s, Function *f, CompData *out, Vector *tokens, si
 					} else {
 						start = build + 1;
 					}
-					var_end(&v);
+					
+					if (v.name != NULL)
+						var_end(&v);
+
 				} else {
 					start = build + 1;
 				}
@@ -5712,7 +5751,8 @@ void p2_compile_control(Scope *s, Function *f, CompData *out, Vector *tokens, si
 			// TODO: figure out eval parameter needs (maybe needs start and end size_t?)
 			// and how eval will play into top level defs (if at all)
 			Variable e = eval(&sub, out, tokens, pos, false, NULL);
-			var_end(&e);
+			if (e.name != NULL)
+				var_end(&e);
 		}
 	}
 
@@ -5737,7 +5777,7 @@ void p2_compile_control(Scope *s, Function *f, CompData *out, Vector *tokens, si
 					// Eval, check ending
 					Variable v = _eval(&sub, out, tokens, start, rep);
 					scope_free_all_tmp(&sub, out);
-					if (strcmp(v.type->name, "bool") == 0 && tok_str_eq(t, "]") && scope_name_eq(&sub, "loop")) {
+					if (v.type != NULL && strcmp(v.type->name, "bool") == 0 && tok_str_eq(t, "]") && scope_name_eq(&sub, "loop")) {
 						rep = start - 1;
 						start = r_end;
 						vect_push_string(&out->text, "\tjnz ");
@@ -5746,7 +5786,8 @@ void p2_compile_control(Scope *s, Function *f, CompData *out, Vector *tokens, si
 					} else {
 						start = rep + 1;
 					}
-					var_end(&v);
+					if (v.name != NULL)
+						var_end(&v);
 				} else {
 					start = rep + 1;
 				}

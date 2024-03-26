@@ -1,15 +1,30 @@
 :import "c_wrap_linux.tnsl"
 :import "vector.tnsl"
 
-/; main [int]
+/; push_char(Vector` a, uint8 c)
+	a.push(~c)
+;/
 
+/; main [int]
 	Vector a
 	a.init(1)
 	
-	
+	push_char(~a, 'h')
+	push_char(~a, 'e')
+	push_char(~a, 'l')
+	push_char(~a, 'l')
+	push_char(~a, 'o')
+	push_char(~a, ' ')
+	push_char(~a, 'w')
+	push_char(~a, 'o')
+	push_char(~a, 'r')
+	push_char(~a, 'l')
+	push_char(~a, 'd')
+	push_char(~a, '\n')
+	push_char(~a, 0)
+	_printf(a.data)
 
 	a.end()
-
 	return 0
 ;/
 

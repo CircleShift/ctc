@@ -11,6 +11,8 @@ struct Vector {
 int VECT_DEFAULT_SIZE = 4
 int VECT_MAX_GROW = 128
 
+~uint8 PUSH_STR = "Push %d\n\0"
+
 # Methods on the struct
 /; method Vector
 	
@@ -50,12 +52,16 @@ int VECT_MAX_GROW = 128
 
 	# Push an element onto the end of the vector
 	/; push (~void data)
-		/; if (count == size - 1)
+		/; if (self.count == self.size - 1)
 			self._grow(self.size)
 		;/
+		
+		int offset = self._elsz * self.count
 
 		/; loop (int i = 0; i < self._elsz) [i++]
-			(self.data + i)` = (data + i)`
+			~uint8 to = self.data + offset + i
+			~uint8 from = data + i
+			to` = from`
 		;/
 
 		self.count++

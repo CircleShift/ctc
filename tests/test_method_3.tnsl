@@ -1,0 +1,19 @@
+struct Mock {
+	int i, j
+}
+
+/; method Mock
+
+	/; mul () [int]
+		int j = self.i * self.j
+		return self.i
+	;/
+;/
+
+/; main [int]
+	Mock a
+	a.i = 69
+	a.j = 0
+	return a.mul()
+;/
+
