@@ -4967,7 +4967,7 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 		} else if (tok_str_eq(op_token, "len")){
 			out = var_init("#literal", typ_get_inbuilt("uint"));
 			out.location = LOC_LITL;
-			out.offset = rhs.type->size;
+			out.offset = _var_size(&rhs);
 			var_end(&rhs);
 			return out;
 		} else {
@@ -6412,7 +6412,7 @@ int main(int argc, char ** argv) {
 		help();
 		return 1;
 	} else if (strcmp(argv[1], "-v") == 0) {
-		printf("C based TNSL Compiler (CTC) - version 0.4\n");
+		printf("C based TNSL Compiler (CTC) - version 0.4.1\n");
 		return 0;
 	} else if (strcmp(argv[1], "-t") == 0) {
 		Artifact in = art_from_str(argv[2], '/');
