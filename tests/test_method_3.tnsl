@@ -14,6 +14,7 @@ struct Mock {
 	Mock a
 	a.i = 69
 	a.j = 0
-	return a.mul()
+	a.mul()
+	return a.i
 ;/
 

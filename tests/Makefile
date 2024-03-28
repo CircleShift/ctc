@@ -7,8 +7,8 @@ src_files := $(wildcard *.tnsl)
 obj_files := $(src_files:.tnsl=.o)
 out_files := $(src_files:.tnsl=.out)
 
+.PHONY: all outdir clean
 all: outdir $(out_files)
-.PHONY: all test
 
 %.asm: %.tnsl
 	../ctc $< $(obj_dir)/$@
