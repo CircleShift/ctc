@@ -1,0 +1,21 @@
+struct Hold {
+	~~uint8 a,
+	~uint8 b
+}
+
+/; method Hold
+
+	/; set (~uint8 to_set)
+		self.b = to_set
+		self.a = ~self.b
+	;/
+;/
+
+/; main [int]
+	uint8 val = 69
+	
+	Hold h
+	h.set(~val)
+	
+	return h.a``
+;/

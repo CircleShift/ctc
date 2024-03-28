@@ -1,0 +1,5 @@
+~uint8 vals = "EBCDE"
+
+/; main [int]
+	return vals{0}
+;/
