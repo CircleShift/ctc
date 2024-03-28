@@ -1027,14 +1027,19 @@ void var_op_index(CompData *out, Variable *store, Variable *from, Variable *inde
 
 	vect_push_string(&out->text, "\tlea rsi, ");
 	if (_var_first_nonref(from) == PTYPE_PTR) {
-		vect_push_free_string(&out->text, _gen_address("", "rsi", "rax", 1, 0, false));
+		char *reg = _op_get_register(store->location, 8);
+		vect_push_free_string(&out->text, _gen_address("", reg, "rax", 1, 0, false));
+		free(reg);
 	} else if (_var_first_nonref(from) == PTYPE_ARR) {
 		// Additional offset due to arrays containing a length at the start
-		vect_push_free_string(&out->text, _gen_address("", "rsi", "rax", 1, 8, false));
+		char *reg = _op_get_register(store->location, 8);
+		vect_push_free_string(&out->text, _gen_address("", reg, "rax", 1, 8, false));
+		free(reg);
 	} else {
 		vect_push_string(&out->text, "rsi ; COMPILER ERROR!");
 	}
 	vect_push_string(&out->text, " ; Index complete.\n\n");
+	store->location = 5;
 }
 
 // Pure set simply copies data from one source to another, disregarding
@@ -4529,7 +4534,7 @@ Variable _eval_call(Scope *s, CompData *data, Vector *tokens, Function *f, Varia
 		// preprocess, find end of current param
 		while (pend < max) {
 			Token *psep = vect_get(tokens, pend);
-			if (tok_str_eq(psep, "}") || tok_str_eq(psep, ",")) {
+			if (tok_str_eq(psep, ")") || tok_str_eq(psep, ",")) {
 				break;
 			} else if (psep->type == TT_DELIMIT) {
 				pend = tnsl_find_closing(tokens, pend);
@@ -4593,7 +4598,7 @@ Variable _eval_call(Scope *s, CompData *data, Vector *tokens, Function *f, Varia
 		// preprocess, find end of current param
 		while (pend < max) {
 			Token *psep = vect_get(tokens, pend);
-			if (tok_str_eq(psep, "}") || tok_str_eq(psep, ",")) {
+			if (tok_str_eq(psep, ")") || tok_str_eq(psep, ",")) {
 				break;
 			} else if (psep->type == TT_DELIMIT) {
 				pend = tnsl_find_closing(tokens, pend);
