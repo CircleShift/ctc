@@ -5022,9 +5022,12 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 		return rhs;
 	}
 	
-	if (op != 10 && !scope_is_tmp(&out)) {
+	if (op != 10 && (!scope_is_tmp(&out) || _var_ptr_type(&out) == PTYPE_REF)) {
 		Variable tmp = scope_mk_tmp(s, data, &out);
-		var_end(&out);
+		if (scope_is_tmp(&out))
+			scope_free_tmp(s, data, &out);
+		else
+			var_end(&out);
 		out = tmp;
 	}
 	
