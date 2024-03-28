@@ -1,0 +1,13 @@
+struct Rec {
+	~Rec r,
+	int i
+}
+
+/; main [int]
+
+	Rec a, b
+	a.i = 1
+	a.r = ~b
+	a.r`.i = 69
+	return b.i
+;/

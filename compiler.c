@@ -1215,7 +1215,10 @@ char *_var_get_store(CompData *out, Variable *store) {
 		vect_push_string(&out->text, "; litl set\n");
 		if (store->type != NULL)
 			return _op_get_register(6, _var_size(store));
-		return _op_get_register(6, 8); 
+		return _op_get_register(6, 8);
+		var_end(store);
+		*store = var_init("#store", typ_get_inbuilt("int"));
+		store->location = 6;
 	} else if (store->location < 0) {
 		return _gen_address(PREFIXES[_var_size(store) - 1], "rbp", "", 0, store->offset, false);
 	} else {
@@ -4819,6 +4822,7 @@ Variable _eval_literal(Scope *s, CompData *data, Vector *tokens, size_t literal)
 		out.location = LOC_LITL;
 	} else {
 		out.location = LOC_LITL;
+		out.type = typ_get_inbuilt("int");
 		if (t->data[0] == '\'')
 			out.offset = tnsl_unquote_char(t->data + 1);
 		else
@@ -5017,16 +5021,8 @@ Variable _eval(Scope *s, CompData *data, Vector *tokens, size_t start, size_t en
 	if (out.name == NULL) {
 		return rhs;
 	}
-
-	if (out.location == LOC_LITL) {
-		if (rhs.location != LOC_LITL) {
-			Variable tmp = rhs;
-			out = rhs;
-			rhs = tmp;
-		}
-	}
 	
-	if (op != 10 && out.location != LOC_LITL) {
+	if (op != 10 && !scope_is_tmp(&out)) {
 		Variable tmp = scope_mk_tmp(s, data, &out);
 		var_end(&out);
 		out = tmp;
