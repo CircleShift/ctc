@@ -819,15 +819,15 @@ int _var_size(Variable *var) {
 	if (var->location == LOC_LITL) {
 		return -1;
 	}
+	
 	size_t count = var->ptr_chain.count;
-	int *ptype = vect_get(&var->ptr_chain, count - 1);
-
-	while(count > 0 && *ptype == PTYPE_REF) {
-	ptype = vect_get(&var->ptr_chain, --count);
-	}
-
-	if(count > 0) {
-		return 8;
+	int *ptype;
+	while(count > 0) {
+		ptype = vect_get(&var->ptr_chain, count - 1);
+		if (*ptype != PTYPE_REF) {
+			return 8;
+		}
+		count--;
 	}
 
 	return var->type->size;
@@ -938,8 +938,11 @@ void var_op_dereference(CompData *out, Variable *store, Variable *from) {
 		store->offset = 0;
 
 	// Keep de-referencing until we reach the pointer (or ptr_chain bottoms out).
-	int *current = vect_get(&store->ptr_chain, store->ptr_chain.count - 1);
-	while(*current == PTYPE_REF && store->ptr_chain.count > 1) {
+	int *current;
+	while(store->ptr_chain.count > 1) {
+		current = vect_get(&store->ptr_chain, store->ptr_chain.count - 1);
+		if (*current != PTYPE_REF)
+			break;
 		vect_push_string(&out->text, "\tmov rsi, [rsi] ; Dereference\n");
 		vect_pop(&store->ptr_chain);
 	}
