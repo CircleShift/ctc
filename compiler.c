@@ -833,6 +833,28 @@ int _var_size(Variable *var) {
 	return var->type->size;
 }
 
+// The size of the element if you were to strip off one
+// pointer chain value. useful for indexing
+int _var_strip_size(Variable *var) {
+	if (var->location == LOC_LITL) {
+		return -1;
+	} else if (var->ptr_chain.count == 0) {
+		return var->type->size;
+	}
+
+	size_t count = var->ptr_chain.count - 1;
+	int *ptype;
+	while(count > 0) {
+		ptype = vect_get(&var->ptr_chain, count - 1);
+		if (*ptype != PTYPE_REF) {
+			return 8;
+		}
+		count--;
+	}
+
+	return var->type->size;
+}
+
 // Pure size in the sense that references count as pointers,
 // so returns 8 if reference, pointer, or array.
 int _var_pure_size(Variable *var) {
@@ -1015,11 +1037,11 @@ void var_op_index(CompData *out, Variable *store, Variable *from, Variable *inde
 	vect_push_free_string(&out->text, idx_by);
 	vect_push_string(&out->text, " ; Pre-index\n");
 	
-	if(_var_size(from) > 1) {
+	if(_var_strip_size(from) > 1) {
 		// To multiply by the var size, we load the var size into rdx, then
 		// multiply by it.
 		vect_push_string(&out->text, "\tmov rdx, ");
-		vect_push_free_string(&out->text, int_to_str(_var_size(from)));
+		vect_push_free_string(&out->text, int_to_str(_var_strip_size(from)));
 		vect_push_string(&out->text, " ; Size of element held by ptr (pre-index)\n");
 		
 		vect_push_string(&out->text, "\tmul rdx ; Index multiplication by data size\n");
@@ -2314,7 +2336,7 @@ void *mod_find_rec(Module *mod, Artifact *art, size_t sub, int find_type) {
 			return NULL;
 		}
 
-		for (size_t i = 0; i < search->count;i++) {
+		for (size_t i = 0; i < search->count; i++) {
 			void *e = vect_get(search, i);
 			if (find_type == FT_VAR && strcmp(((Variable *)e)->name, *to_check) == 0) {
 				return e;
@@ -3735,7 +3757,8 @@ void p1_size_type (Module *root, Type *t) {
 		char *n_end = strchr(var->name, ' ');
 		
 		if (n_end == NULL) {
-			printf("COMPILER ERROR: Did not properly assure type %s had all members with both name and RTN\n\n", t->name);
+			printf("COMPILER ERROR: Did not properly assure type %s had all members with both name and RTN (size_type)\n", t->name);
+			printf("\toffending member: %s\n", var->name);
 			p1_error = true;
 			sum = -2;
 			break;
@@ -3844,7 +3867,7 @@ void p1_resolve_func_types(Module *root, Function *func) {
 		char *n_end = strchr(var->name, ' ');
 
 		if (n_end == NULL) {
-			printf("COMPILER ERROR: Did not properly assure function %s had all parameters with both name and RTN\n\n", func->name);
+			printf("COMPILER ERROR: Did not properly assure function %s had all parameters with both name and RTN (resolve_func_types)\n\n", func->name);
 			p1_error = true;
 			break;
 		}
@@ -3916,16 +3939,16 @@ void p1_resolve_types(Module *root) {
 	}
 
 	for(size_t i = 0; i < root->submods.count; i++) {
-		p1_resolve_types(vect_get(&root->submods, i));
 		Module *s = vect_get(&root->submods, i);
 		s->parent = root;
+		p1_resolve_types(s);
 	}
 
 	for(size_t i = 0; i < root->funcs.count; i++) {
-		p1_resolve_func_types(root, vect_get(&root->funcs, i));
-		// when created, the function was on the stack. Make sure it is not anymore
 		Function *f = vect_get(&root->funcs, i);
 		f->module = root;
+		p1_resolve_func_types(root, f);
+		// when created, the function was on the stack. Make sure it is not anymore
 	}
 
 	for (size_t i = 0; i < root->vars.count; i++) {
@@ -5448,8 +5471,6 @@ void eval_strict(CompData *out, Vector *tokens, Variable *v, size_t start) {
 	vect_push_string(&store, ":\n");
 	int ntharr = 0;
 
-	Token *cur = vect_get(tokens, start + 1);
-
 	if (_var_ptr_type(v) > 1) {
 		eval_strict_arr(v->mod, &store, tokens, v, start + 2, datalab, &ntharr);
 	} else if (_var_ptr_type(v) > PTYPE_NONE) {
@@ -5550,7 +5571,7 @@ void p2_compile_def(Scope *s, CompData *out, Vector *tokens, size_t *pos, Vector
 			}
 			var_end(&tmp);
 		} else if (t->type == TT_DELIMIT) {
-			int chk = tnsl_find_closing(tokens, *pos);
+			*pos = tnsl_find_closing(tokens, *pos);
 		} else if (tok_str_eq(t, ",")) {
 			// Split def
 			if(*pos - start > 1) {
