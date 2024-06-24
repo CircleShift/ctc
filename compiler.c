@@ -1146,7 +1146,6 @@ void _var_op_set_ptr(CompData *out, Variable *store, Variable *from) {
 	// Pointer coercion should always work
 	char *mov_from;
 	char *mov_to;
-	Vector mov_type; // load or move instruction
 
 	// First deref from var, then deref store variable, then move.
 	if(_var_ptr_type(store) != PTYPE_REF) {
@@ -1172,16 +1171,13 @@ void _var_op_set_ptr(CompData *out, Variable *store, Variable *from) {
 	if (_var_ptr_type(from) != PTYPE_REF) {
 		if (from->location > 0 || from->location == LOC_LITL) {
 			mov_from = _op_get_location(from);
-			mov_type = vect_from_string("\tmov ");
 		} else if (store->location > 0 && _var_ptr_type(store) != PTYPE_REF) {
 			mov_from = _op_get_location(from);
-			mov_type = vect_from_string("\tlea ");
 		} else {
-			vect_push_string(&out->text, "\tlea rsi, ");
+			vect_push_string(&out->text, "\tmov rsi, ");
 			vect_push_free_string(&out->text, _op_get_location(from));
 			vect_push_string(&out->text, " ; Move for ptr set\n");
 			mov_from = _op_get_register(5, 8);
-			mov_type = vect_from_string("\tmov ");
 		}
 	} else {
 		// Need to deref
@@ -1215,10 +1211,9 @@ void _var_op_set_ptr(CompData *out, Variable *store, Variable *from) {
 		}
 
 		mov_from = _op_get_register(5, 8);
-		mov_type = vect_from_string("\tmov ");
 	}
 
-	vect_push_free_string(&out->text, vect_as_string(&mov_type));
+	vect_push_string(&out->text, "\tmov ");
 	vect_push_string(&out->text, mov_to);
 	vect_push_string(&out->text, ", ");
 	vect_push_free_string(&out->text, mov_from);
@@ -1226,6 +1221,8 @@ void _var_op_set_ptr(CompData *out, Variable *store, Variable *from) {
 
 	if (_var_first_nonref(store) == PTYPE_PTR && _var_first_nonref(from) == PTYPE_ARR) {
 		vect_push_string(&out->text, "\tadd ");
+		if (mov_to[0] == '[')
+			vect_push_string(&out->text, " qword ");
 		vect_push_string(&out->text, mov_to);
 		vect_push_string(&out->text, ", ");
 		vect_push_string(&out->text, "8 ; Reference to first el in array\n\n");
@@ -4834,7 +4831,7 @@ Variable _eval_literal(Scope *s, CompData *data, Vector *tokens, size_t literal)
 		char *label = scope_gen_const_label(s);
 		
 		vect_push_string(&data->data, label);
-		vect_push_string(&data->data, ":\n\tdq ");
+		vect_push_string(&data->data, "#ptr:\n\tdq ");
 		vect_push_free_string(&data->data, int_to_str(str_dat.count));
 		
 		if (str_dat.count > 0)
@@ -4847,9 +4844,14 @@ Variable _eval_literal(Scope *s, CompData *data, Vector *tokens, size_t literal)
 				vect_push_string(&data->data, ", ");
 			}
 		}
-		vect_push_string(&data->data, "\n\n");
+		vect_push_string(&data->data, "\n");
 		vect_end(&str_dat);
 		var_end(&out);
+
+		vect_push_string(&data->data, label);
+		vect_push_string(&data->data, ":\n\tdq ");
+		vect_push_string(&data->data, label);
+		vect_push_string(&data->data, "#ptr\n\n");
 
 		out = var_init(label, typ_get_inbuilt("uint8"));
 		out.mod = s->current;
