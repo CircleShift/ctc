@@ -11,17 +11,19 @@ out_files := $(src_files:.tnsl=.out)
 all: outdir $(out_files)
 
 %.asm: %.tnsl
-	../ctc $< $(obj_dir)/$@
+	@../ctc $< $(obj_dir)/$@
 
 %.o: %.asm
-	nasm -f elf64 -o $(obj_dir)/$@ $(obj_dir)/$<
+	@nasm -f elf64 -o $(obj_dir)/$@ $(obj_dir)/$<
 
 %.out: %.o
-	gcc -o $(out_dir)/$@ $(obj_dir)/$<
+	@gcc -o $(out_dir)/$@ $(obj_dir)/$<
+	@echo "Built $(out_dir)/$@"
 
 outdir:
-	mkdir -p $(out_dir)
-	mkdir -p $(obj_dir)
+	@mkdir -p $(out_dir)
+	@mkdir -p $(obj_dir)
+	@echo "Created output directories"
 
 clean:
 	rm -rf out/*
