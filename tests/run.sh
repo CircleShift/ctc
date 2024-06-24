@@ -4,8 +4,9 @@ FAILURE=0
 
 for i in out/*.out; do
 	./$i
-	if [[ $? -ne 69 ]]; then
-		echo "[FAILED] $i"
+	EXC=$?
+	if [[ $EXC -ne 69 ]]; then
+		echo "[FAILED] (Code $EXC) $i"
 		FAILURE=1
 	else
 		echo "[  OK  ] $i"
