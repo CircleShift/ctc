@@ -4854,7 +4854,7 @@ Variable _eval_literal(Scope *s, CompData *data, Vector *tokens, size_t literal)
 		vect_push_string(&data->data, "#ptr\n\n");
 
 		out = var_init(label, typ_get_inbuilt("uint8"));
-		out.mod = s->current;
+		out.mod = NULL;
 		out.location = LOC_DATA;
 		free(label);
 		int arr_t = PTYPE_ARR;
